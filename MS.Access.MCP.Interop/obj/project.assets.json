@@ -325,32 +325,24 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\brickly\\.nuget\\packages\\": {},
-    "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
+    "C:\\Users\\ישראל רוכלין\\.nuget\\packages\\": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\brickly\\Desktop\\MS-Access-MCP\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj",
+      "projectUniqueName": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj",
       "projectName": "MS.Access.MCP.Interop",
-      "projectPath": "C:\\Users\\brickly\\Desktop\\MS-Access-MCP\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj",
-      "packagesPath": "C:\\Users\\brickly\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\brickly\\Desktop\\MS-Access-MCP\\MS.Access.MCP.Interop\\obj\\",
+      "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj",
+      "packagesPath": "C:\\Users\\ישראל רוכלין\\.nuget\\packages\\",
+      "outputPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\obj\\",
       "projectStyle": "PackageReference",
-      "fallbackFolders": [
-        "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
-      ],
       "configFilePaths": [
-        "C:\\Users\\brickly\\AppData\\Roaming\\NuGet\\NuGet.Config",
-        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
-        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        "C:\\Users\\ישראל רוכלין\\AppData\\Roaming\\NuGet\\NuGet.Config"
       ],
       "originalTargetFrameworks": [
         "net8.0-windows"
       ],
       "sources": {
-        "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
-        "C:\\Program Files\\dotnet\\library-packs": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {
@@ -368,8 +360,7 @@
         "enableAudit": "true",
         "auditLevel": "low",
         "auditMode": "direct"
-      },
-      "SdkAnalysisLevel": "9.0.300"
+      }
     },
     "frameworks": {
       "net8.0-windows7.0": {
@@ -403,7 +394,7 @@
             "privateAssets": "none"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.302/PortableRuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.419/PortableRuntimeIdentifierGraph.json"
       }
     }
   }

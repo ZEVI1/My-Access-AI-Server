@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MS.Access.MCP.Interop")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1a6e5eace6cc07a481fc4d1722f55a0074253086")]
 [assembly: System.Reflection.AssemblyProductAttribute("MS.Access.MCP.Interop")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MS.Access.MCP.Interop")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

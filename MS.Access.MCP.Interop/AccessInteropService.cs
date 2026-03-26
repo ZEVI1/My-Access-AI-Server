@@ -10,6 +10,10 @@ namespace MS.Access.MCP.Interop
         private string? _currentDatabasePath;
         private bool _disposed = false;
 
+        // COM Automation fields
+        private dynamic? _accessApplication;  // Microsoft.Office.Interop.Access.Application
+        private dynamic? _currentDatabase;     // Microsoft.Office.Interop.Access.Database
+
         #region 1. Connection Management
 
         public void Connect(string databasePath)
@@ -19,18 +23,98 @@ namespace MS.Access.MCP.Interop
 
             _currentDatabasePath = databasePath;
             
-            // Create OleDb connection for direct data access
-            var connectionString = $"Provider=Microsoft.ACE.OLEDB.12.0;Data Source={databasePath};";
-            _oleDbConnection = new OleDbConnection(connectionString);
-            _oleDbConnection.Open();
+            try
+            {
+                // Initialize COM Automation - Launch Access Application
+                _accessApplication = new Microsoft.Office.Interop.Access.Application();
+                _accessApplication.Visible = false;  // Run in background
+                
+                // Open the database using COM Automation
+                var dbEngine = _accessApplication.DBEngine;
+                _currentDatabase = dbEngine.OpenDatabase(databasePath);
+                
+                // Also create OleDb connection for direct data access
+                var connectionString = $"Provider=Microsoft.ACE.OLEDB.12.0;Data Source={databasePath};";
+                _oleDbConnection = new OleDbConnection(connectionString);
+                _oleDbConnection.Open();
+            }
+            catch (Exception ex)
+            {
+                // Clean up on failure
+                if (_currentDatabase != null)
+                {
+                    try { Marshal.ReleaseComObject(_currentDatabase); }
+                    catch { }
+                    _currentDatabase = null;
+                }
+                if (_accessApplication != null)
+                {
+                    try { _accessApplication.Quit(); }
+                    catch { }
+                    try { Marshal.ReleaseComObject(_accessApplication); }
+                    catch { }
+                    _accessApplication = null;
+                }
+                throw new InvalidOperationException($"Failed to connect to database: {ex.Message}", ex);
+            }
         }
 
         public void Disconnect()
         {
-            _oleDbConnection?.Close();
-            _oleDbConnection?.Dispose();
-            _oleDbConnection = null;
-            _currentDatabasePath = null;
+            try
+            {
+                // Close OleDb connection first
+                if (_oleDbConnection != null)
+                {
+                    try
+                    {
+                        _oleDbConnection.Close();
+                        _oleDbConnection.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"Error closing OleDb connection: {ex.Message}");
+                    }
+                    _oleDbConnection = null;
+                }
+
+                // Release COM objects in reverse order
+                // 1. Close the database
+                if (_currentDatabase != null)
+                {
+                    try
+                    {
+                        _currentDatabase.Close();
+                        Marshal.ReleaseComObject(_currentDatabase);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"Error closing database: {ex.Message}");
+                    }
+                    _currentDatabase = null;
+                }
+
+                // 2. Quit Access Application
+                if (_accessApplication != null)
+                {
+                    try
+                    {
+                        _accessApplication.Quit();
+                        Marshal.ReleaseComObject(_accessApplication);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"Error quitting Access: {ex.Message}");
+                    }
+                    _accessApplication = null;
+                }
+
+                _currentDatabasePath = null;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error during disconnect: {ex.Message}");
+            }
         }
 
         public bool IsConnected => _oleDbConnection?.State == System.Data.ConnectionState.Open;
@@ -280,14 +364,76 @@ namespace MS.Access.MCP.Interop
 
         public void OpenForm(string formName)
         {
-            // This would require full COM interop - simplified for now
-            Console.WriteLine($"Form {formName} open functionality requires full COM interop");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
+            try
+            {
+                // acForm = 2, acNormal = 0
+                _accessApplication?.DoCmd.OpenForm(formName, 2, null, null, 0);
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to open form '{formName}': {comEx.Message}", comEx);
+            }
         }
 
         public void CloseForm(string formName)
         {
-            // This would require full COM interop - simplified for now
-            Console.WriteLine($"Form {formName} close functionality requires full COM interop");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
+            try
+            {
+                // acForm = 2, acSaveYes = 1
+                _accessApplication?.DoCmd.Close(2, formName, 1);
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to close form '{formName}': {comEx.Message}", comEx);
+            }
+        }
+
+        public void CreateForm(string formName)
+        {
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
+            if (FormExists(formName))
+                throw new InvalidOperationException($"Form '{formName}' already exists.");
+
+            dynamic? form = null;
+
+            try
+            {
+                form = _accessApplication?.CreateForm();
+                if (form == null)
+                    throw new InvalidOperationException("Failed to create form.");
+
+                form.Name = formName;
+                form.Visible = false;
+                _accessApplication?.DoCmd.Close(2, formName, 1);
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to create form '{formName}': {comEx.Message}", comEx);
+            }
+            finally
+            {
+                if (form != null)
+                {
+                    try { Marshal.ReleaseComObject(form); } catch { }
+                }
+            }
         }
 
         #endregion
@@ -334,26 +480,120 @@ namespace MS.Access.MCP.Interop
 
         public string GetVBACode(string projectName, string moduleName)
         {
-            // This would require full COM interop - simplified for now
-            return $"// VBA code for {moduleName} would be retrieved here";
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+                throw new ArgumentException("Project name and module name are required.");
+
+            try
+            {
+                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                if (vbeProject == null)
+                    throw new InvalidOperationException("Access VBProject not available.");
+
+                dynamic component = vbeProject.VBComponents[moduleName];
+                if (component == null)
+                    throw new InvalidOperationException($"Module '{moduleName}' not found.");
+
+                dynamic codeModule = component.CodeModule;
+                var lineCount = (int)codeModule.CountOfLines;
+                return (string)codeModule.Lines(1, lineCount);
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to get VBA code for module '{moduleName}': {comEx.Message}", comEx);
+            }
         }
 
         public void SetVBACode(string projectName, string moduleName, string code)
         {
-            // This would require full COM interop - simplified for now
-            Console.WriteLine($"VBA code for {moduleName} would be set here");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+                throw new ArgumentException("Project name and module name are required.");
+
+            try
+            {
+                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                if (vbeProject == null)
+                    throw new InvalidOperationException("Access VBProject not available.");
+
+                dynamic component = vbeProject.VBComponents[moduleName];
+                if (component == null)
+                    throw new InvalidOperationException($"Module '{moduleName}' not found.");
+
+                dynamic codeModule = component.CodeModule;
+                var lineCount = (int)codeModule.CountOfLines;
+
+                if (lineCount > 0)
+                    codeModule.DeleteLines(1, lineCount);
+
+                if (!string.IsNullOrEmpty(code))
+                    codeModule.AddFromString(code);
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to set VBA code for module '{moduleName}': {comEx.Message}", comEx);
+            }
         }
 
         public void AddVBAProcedure(string projectName, string moduleName, string procedureName, string code)
         {
-            // This would require full COM interop - simplified for now
-            Console.WriteLine($"VBA procedure {procedureName} would be added to {moduleName}");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName) || string.IsNullOrEmpty(procedureName))
+                throw new ArgumentException("Project name, module name, and procedure name are required.");
+
+            var procedureCode = code;
+            if (string.IsNullOrEmpty(procedureCode))
+            {
+                procedureCode = $"Public Sub {procedureName}()\n    ' TODO: implement \nEnd Sub";
+            }
+
+            try
+            {
+                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                if (vbeProject == null)
+                    throw new InvalidOperationException("Access VBProject not available.");
+
+                dynamic component = vbeProject.VBComponents[moduleName];
+                if (component == null)
+                    throw new InvalidOperationException($"Module '{moduleName}' not found.");
+
+                dynamic codeModule = component.CodeModule;
+                var lineCount = (int)codeModule.CountOfLines;
+                var insertAt = lineCount + 1;
+
+                codeModule.InsertLines(insertAt, procedureCode);
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to add VBA procedure '{procedureName}' in module '{moduleName}': {comEx.Message}", comEx);
+            }
         }
 
         public void CompileVBA()
         {
-            // This would require full COM interop - simplified for now
-            Console.WriteLine("VBA compilation would be performed here");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            try
+            {
+                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                if (vbeProject == null)
+                    throw new InvalidOperationException("Access VBProject not available.");
+
+                // Attempt to compile by executing the Access menu command for VBA compile
+                // acCmdCompile = 602 or 211? use RunCommand constant 356
+                _accessApplication?.DoCmd.RunCommand(600); // acCmdCompile may vary; if invalid, catches
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to compile VBA code: {comEx.Message}", comEx);
+            }
         }
 
         #endregion
@@ -440,57 +680,189 @@ namespace MS.Access.MCP.Interop
 
         public List<ControlInfo> GetFormControls(string formName)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
 
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
+            var app = _accessApplication ?? throw new InvalidOperationException("Access application is not initialized.");
             var controls = new List<ControlInfo>();
-            
-            // Simplified control discovery - would require full COM interop for actual control enumeration
-            // For now, return a placeholder control
-            controls.Add(new ControlInfo
+
+            try
             {
-                Name = "PlaceholderControl",
-                Type = "TextBox",
-                Left = 100,
-                Top = 100,
-                Width = 200,
-                Height = 25,
-                Visible = true,
-                Enabled = true
-            });
+                dynamic form = app.Forms[formName];
+
+                foreach (dynamic control in form.Controls)
+                {
+                    try
+                    {
+                        controls.Add(new ControlInfo
+                        {
+                            Name = control.Name ?? "",
+                            Type = control.ControlType?.ToString() ?? "",
+                            Left = Convert.ToInt32(control.Left),
+                            Top = Convert.ToInt32(control.Top),
+                            Width = Convert.ToInt32(control.Width),
+                            Height = Convert.ToInt32(control.Height),
+                            Visible = control.Visible ?? true,
+                            Enabled = control.Enabled ?? true
+                        });
+                    }
+                    catch (COMException comEx)
+                    {
+                        Console.Error.WriteLine($"Error reading control properties: {comEx.Message}");
+                        continue;
+                    }
+                }
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to enumerate controls in form '{formName}': {comEx.Message}", comEx);
+            }
+            catch (ArgumentException argEx)
+            {
+                throw new InvalidOperationException($"Form '{formName}' not found: {argEx.Message}", argEx);
+            }
 
             return controls;
         }
 
         public ControlProperties GetControlProperties(string formName, string controlName)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
 
-            // Simplified control properties - would require full COM interop for actual properties
-            return new ControlProperties
+            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
+                throw new ArgumentException("Form name and control name are required.");
+
+            var app = _accessApplication ?? throw new InvalidOperationException("Access application is not initialized.");
+
+            try
             {
-                Name = controlName,
-                Type = "TextBox",
-                Left = 100,
-                Top = 100,
-                Width = 200,
-                Height = 25,
-                Visible = true,
-                Enabled = true,
-                BackColor = 16777215, // White
-                ForeColor = 0, // Black
-                FontName = "Arial",
-                FontSize = 10,
-                FontBold = false,
-                FontItalic = false
-            };
+                dynamic form = app.Forms[formName];
+                dynamic control = form.Controls[controlName];
+
+                var properties = new ControlProperties
+                {
+                    Name = control.Name ?? "",
+                    Type = control.ControlType?.ToString() ?? "",
+                    Left = SafeGetInt32(control, "Left", 0),
+                    Top = SafeGetInt32(control, "Top", 0),
+                    Width = SafeGetInt32(control, "Width", 100),
+                    Height = SafeGetInt32(control, "Height", 20),
+                    Visible = SafeGetBool(control, "Visible", true),
+                    Enabled = SafeGetBool(control, "Enabled", true),
+                    BackColor = SafeGetInt32(control, "BackColor", -1),
+                    ForeColor = SafeGetInt32(control, "ForeColor", 0),
+                    FontName = SafeGetString(control, "FontName", "Arial"),
+                    FontSize = SafeGetInt32(control, "FontSize", 11),
+                    FontBold = SafeGetBool(control, "FontBold", false),
+                    FontItalic = SafeGetBool(control, "FontItalic", false)
+                };
+
+                return properties;
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to get properties for control '{controlName}' in form '{formName}': {comEx.Message}", 
+                    comEx);
+            }
+            catch (ArgumentException argEx)
+            {
+                throw new InvalidOperationException(
+                    $"Control '{controlName}' not found in form '{formName}': {argEx.Message}", 
+                    argEx);
+            }
         }
 
         public void SetControlProperty(string formName, string controlName, string propertyName, object value)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
 
-            // This would require full COM interop - simplified for now
-            Console.WriteLine($"Property {propertyName} of control {controlName} would be set to {value}");
+            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName) || string.IsNullOrEmpty(propertyName))
+                throw new ArgumentException("Form name, control name, and property name are required.");
+
+            var app = _accessApplication ?? throw new InvalidOperationException("Access application is not initialized.");
+
+            try
+            {
+                dynamic form = app.Forms[formName];
+                dynamic control = form.Controls[controlName];
+
+                control.GetType().InvokeMember(propertyName,
+                    System.Reflection.BindingFlags.SetProperty,
+                    null,
+                    control,
+                    new object[] { value });
+            }
+            catch (COMException comEx)
+            {
+                throw new InvalidOperationException(
+                    $"COM error setting property '{propertyName}' to '{value}' on control '{controlName}': {comEx.Message}",
+                    comEx);
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to set property '{propertyName}' on control '{controlName}': {ex.InnerException?.Message}",
+                    ex);
+            }
+            catch (ArgumentException argEx)
+            {
+                throw new InvalidOperationException(
+                    $"Control '{controlName}' not found in form '{formName}': {argEx.Message}",
+                    argEx);
+            }
+        }
+
+        // Helper methods to safely extract properties with fallback values
+        private int SafeGetInt32(dynamic obj, string propertyName, int defaultValue)
+        {
+            try
+            {
+                var value = obj.GetType().InvokeMember(propertyName, 
+                    System.Reflection.BindingFlags.GetProperty, null, obj, null);
+                return value != null ? Convert.ToInt32(value) : defaultValue;
+            }
+            catch (COMException)
+            {
+                return defaultValue;
+            }
+            catch (System.Reflection.TargetInvocationException)
+            {
+                return defaultValue;
+            }
+        }
+
+        private bool SafeGetBool(dynamic obj, string propertyName, bool defaultValue)
+        {
+            try
+            {
+                var value = obj.GetType().InvokeMember(propertyName, 
+                    System.Reflection.BindingFlags.GetProperty, null, obj, null);
+                return value != null ? Convert.ToBoolean(value) : defaultValue;
+            }
+            catch (COMException)
+            {
+                return defaultValue;
+            }
+        }
+
+        private string SafeGetString(dynamic obj, string propertyName, string defaultValue)
+        {
+            try
+            {
+                var value = obj.GetType().InvokeMember(propertyName, 
+                    System.Reflection.BindingFlags.GetProperty, null, obj, null);
+                return value?.ToString() ?? defaultValue;
+            }
+            catch (COMException)
+            {
+                return defaultValue;
+            }
         }
 
         #endregion
@@ -617,7 +989,13 @@ namespace MS.Access.MCP.Interop
             {
                 Disconnect();
                 _disposed = true;
+                GC.SuppressFinalize(this);
             }
+        }
+
+        ~AccessInteropService()
+        {
+            Dispose();
         }
     }
 

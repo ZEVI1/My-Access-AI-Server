@@ -71,6 +71,11 @@ class Program
             Console.Error.WriteLine($"Fatal error: {ex.Message}");
             Environment.Exit(1);
         }
+        finally
+        {
+            // Ensure proper cleanup of Access COM objects and database connection
+            accessService?.Dispose();
+        }
     }
 
     static object HandleInitialize()
@@ -93,7 +98,7 @@ class Program
         {
             tools = new object[]
             {
-                new { name = "connect_access", description = "Connect to the configured Access database", inputSchema = new { type = "object", properties = new { } }, required = new string[] { } },
+                new { name = "connect_access", description = "Connect to an Access database", inputSchema = new { type = "object", properties = new { database_path = new { type = "string", description = "Path to the Access database file (.accdb or .mdb)" } } }, required = new string[] { "database_path" } },
                 new { name = "disconnect_access", description = "Disconnect from the current Access database", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "is_connected", description = "Check if connected to an Access database", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_tables", description = "Get list of all tables in the database", inputSchema = new { type = "object", properties = new { } } },
@@ -177,8 +182,13 @@ class Program
     {
         try
         {
-            // Hard-coded database path
-            var databasePath = @"C:\Users\brickly\Documents\Database1.accdb";
+            // Get database path from arguments
+            if (!arguments.TryGetProperty("database_path", out var dbPathElement))
+                return new { success = false, error = "database_path parameter is required" };
+                
+            var databasePath = dbPathElement.GetString();
+            if (string.IsNullOrEmpty(databasePath))
+                return new { success = false, error = "database_path cannot be empty" };
             
             // Check if database file exists
             if (!File.Exists(databasePath))

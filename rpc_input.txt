@@ -1,0 +1,5 @@
+{"id":1,"method":"tools/call","params":{"name":"connect_access","arguments":{"database_path":"C:\\temp\\MCP_Test.accdb"}}}
+{"id":2,"method":"tools/call","params":{"name":"open_form","arguments":{"form_name":"MyForm"}}}
+{"id":3,"method":"tools/call","params":{"name":"get_form_controls","arguments":{"form_name":"MyForm"}}}
+{"id":4,"method":"tools/call","params":{"name":"get_control_properties","arguments":{"form_name":"MyForm","control_name":"MyControl"}}}
+{"id":5,"method":"tools/call","params":{"name":"set_control_property","arguments":{"form_name":"MyForm","control_name":"MyControl","property_name":"Visible","value":"True"}}}

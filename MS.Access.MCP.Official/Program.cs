@@ -1,81 +1,475 @@
-﻿using System.Text.Json;
+﻿using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using MS.Access.MCP.Interop;
 
 class Program
 {
-    static async Task Main(string[] args)
+    private static void RegisterProcessEvents(AccessWorker accessWorker)
     {
-        // Suppress any build output by immediately starting JSON-RPC mode
-        Console.WriteLine(""); // Clear any pending output
-        
-        var accessService = new AccessInteropService();
-        
-        try
+        AppDomain.CurrentDomain.ProcessExit += (sender, args) =>
         {
-            string? line;
-            while ((line = await Console.In.ReadLineAsync()) != null)
+            FileLogger.Log("ProcessExit: cleaning up Access worker and file logger.");
+            try { accessWorker.Dispose(); } catch { }
+            FileLogger.Shutdown();
+        };
+
+        Console.CancelKeyPress += (sender, args) =>
+        {
+            FileLogger.Log("CancelKeyPress: cleaning up Access worker and file logger.");
+            try { accessWorker.Dispose(); } catch { }
+            FileLogger.Shutdown();
+        };
+    }
+
+    private sealed class RpcRequest
+    {
+        public string Message { get; }
+        public DateTime ReceivedAt { get; }
+        public DateTime StartedAt { get; set; }
+        public bool HasResponseSent { get; set; }
+        public bool TimedOut { get; set; }
+
+        public RpcRequest(string message, DateTime receivedAt)
+        {
+            Message = message;
+            ReceivedAt = receivedAt;
+            StartedAt = DateTime.MinValue;
+            HasResponseSent = false;
+            TimedOut = false;
+        }
+    }
+
+    private sealed class AccessWorker : IDisposable
+    {
+        private readonly BlockingCollection<RpcRequest> _requestQueue = new(new ConcurrentQueue<RpcRequest>());
+        private readonly BlockingCollection<string> _responseQueue;
+        private readonly CancellationTokenSource _internalCancellation = new();
+        private readonly TimeSpan _requestTimeout = TimeSpan.FromSeconds(30);
+        private readonly object _currentLock = new();
+        private RpcRequest? _currentRequest;
+        private readonly Thread _workerThread;
+        private readonly Task _monitorTask;
+        private bool _disposed;
+
+        public AccessWorker(BlockingCollection<string> responseQueue, CancellationToken externalCancellationToken)
+        {
+            _responseQueue = responseQueue;
+            _workerThread = new Thread(Run)
             {
-                try
+                IsBackground = true,
+                Name = "AccessWorker"
+            };
+            _workerThread.SetApartmentState(ApartmentState.STA);
+
+            _workerThread.Start();
+            _monitorTask = Task.Run(() => MonitorTimeoutsAsync(externalCancellationToken));
+        }
+
+        public void EnqueueRequest(string message)
+        {
+            if (_disposed)
+                return;
+
+            try
+            {
+                _requestQueue.Add(new RpcRequest(message, DateTime.UtcNow));
+            }
+            catch (InvalidOperationException)
+            {
+                // The queue has been completed.
+            }
+        }
+
+        private void Run()
+        {
+            using var accessService = new AccessInteropService();
+            try
+            {
+                foreach (var request in _requestQueue.GetConsumingEnumerable(_internalCancellation.Token))
                 {
-                    var document = JsonDocument.Parse(line);
-                    var root = document.RootElement;
-                    
-                    if (!root.TryGetProperty("method", out var methodElement))
-                        continue;
-                        
-                    var method = methodElement.GetString();
-                    if (string.IsNullOrEmpty(method))
-                        continue;
-                        
-                    var id = 0;
-                    if (root.TryGetProperty("id", out var idElement))
-                        id = idElement.GetInt32();
-                        
-                    var paramsElement = root.GetProperty("params");
-
-                    object result = method switch
-                    {
-                        "initialize" => HandleInitialize(),
-                        "tools/list" => HandleToolsList(),
-                        "tools/call" => HandleToolsCall(accessService, paramsElement),
-                        _ => new { error = $"Unknown method: {method}" }
-                    };
-
-                    var response = new JsonRpcResponse
-                    {
-                        Id = id,
-                        Result = result
-                    };
-
-                    var jsonResponse = JsonSerializer.Serialize(response);
-                    Console.WriteLine(jsonResponse);
+                    ProcessRequest(accessService, request);
                 }
-                catch (JsonException ex)
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                FileLogger.Log("Error", "AccessWorkerFailure", new { error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
+        private void ProcessRequest(AccessInteropService accessService, RpcRequest request)
+        {
+            lock (_currentLock)
+            {
+                _currentRequest = request;
+                request.StartedAt = DateTime.UtcNow;
+                request.HasResponseSent = false;
+                request.TimedOut = false;
+            }
+
+            try
+            {
+                var response = ProcessRpcMessage(accessService, request.Message);
+                if (response == null)
+                    return;
+
+                lock (_currentLock)
                 {
-                    // Log JSON parsing errors to stderr
-                    Console.Error.WriteLine($"JSON parsing error: {ex.Message}");
-                    continue;
+                    if (request.HasResponseSent)
+                        return;
+
+                    request.HasResponseSent = true;
                 }
-                catch (Exception ex)
+
+                var jsonResponse = JsonSerializer.Serialize(response, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
+                _responseQueue.Add(jsonResponse);
+                FileLogger.Log("Information", "RpcResponseSent", new { requestId = response.Id, durationMs = (DateTime.UtcNow - request.StartedAt).TotalMilliseconds, method = ExtractMethod(request.Message) });
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log("Error", "RpcProcessingError", new { error = ex.Message, stackTrace = ex.StackTrace });
+
+                lock (_currentLock)
                 {
-                    // Log other errors to stderr
-                    Console.Error.WriteLine($"Error processing request: {ex.Message}");
-                    continue;
+                    if (request.HasResponseSent)
+                        return;
+
+                    request.HasResponseSent = true;
+                }
+
+                var errorResponse = CreateErrorResponse(ExtractId(request.Message), -32603, "Internal error", ex.Message);
+                var jsonError = JsonSerializer.Serialize(errorResponse, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
+                _responseQueue.Add(jsonError);
+            }
+            finally
+            {
+                lock (_currentLock)
+                {
+                    _currentRequest = null;
                 }
             }
         }
+
+        private async Task MonitorTimeoutsAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested && !_requestQueue.IsCompleted)
+            {
+                await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+
+                RpcRequest? currentRequest;
+                lock (_currentLock)
+                {
+                    currentRequest = _currentRequest;
+                }
+
+                if (currentRequest != null &&
+                    !currentRequest.TimedOut &&
+                    !currentRequest.HasResponseSent &&
+                    DateTime.UtcNow - currentRequest.StartedAt > _requestTimeout)
+                {
+                    lock (_currentLock)
+                    {
+                        currentRequest.TimedOut = true;
+                        currentRequest.HasResponseSent = true;
+                    }
+
+                    var id = ExtractId(currentRequest.Message);
+                    var timeoutResponse = CreateErrorResponse(id, -32000, $"Request timed out after {_requestTimeout.TotalSeconds:N0} seconds");
+                    var jsonResponse = JsonSerializer.Serialize(timeoutResponse, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
+                    _responseQueue.Add(jsonResponse);
+                    FileLogger.Log("Warning", "RpcRequestTimeout", new { requestId = id, method = ExtractMethod(currentRequest.Message), durationMs = (DateTime.UtcNow - currentRequest.StartedAt).TotalMilliseconds });
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _requestQueue.CompleteAdding();
+            _internalCancellation.Cancel();
+
+            try { _workerThread.Join(2000); } catch { }
+            try { _monitorTask.Wait(1000); } catch { }
+        }
+    }
+
+    private static string? ExtractMethod(string message)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            if (document.RootElement.TryGetProperty("method", out var methodElement) && methodElement.ValueKind == JsonValueKind.String)
+                return methodElement.GetString();
+        }
+        catch { }
+
+        return null;
+    }
+
+    static async Task Main(string[] args)
+    {
+        Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+        Console.InputEncoding = System.Text.Encoding.UTF8;
+
+        AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+        {
+            var message = $"AssemblyResolve requested for: {args.Name}";
+            FileLogger.Log(message);
+            return null;
+        };
+        
+        var cancellationSource = new CancellationTokenSource();
+        using var stdin = Console.OpenStandardInput();
+        using var responseQueue = new BlockingCollection<string>(new ConcurrentQueue<string>());
+        using var accessWorker = new AccessWorker(responseQueue, cancellationSource.Token);
+        RegisterProcessEvents(accessWorker);
+
+        var writerTask = Task.Run(() => ResponseWriterLoop(responseQueue, cancellationSource.Token));
+
+        try
+        {
+            while (true)
+            {
+                var message = await ReadRpcMessageAsync(stdin, cancellationSource.Token);
+                if (message == null)
+                    break;
+
+                if (string.IsNullOrWhiteSpace(message))
+                    continue;
+
+                FileLogger.Log("Information", "RpcRequestReceived", new { raw = message });
+                accessWorker.EnqueueRequest(message);
+            }
+        }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            // Log fatal errors to stderr
-            Console.Error.WriteLine($"Fatal error: {ex.Message}");
+            FileLogger.Log("Error", "FatalServerError", new { error = ex.Message, stackTrace = ex.StackTrace });
+            var response = CreateErrorResponse(null, -32603, "Internal error", ex.Message);
+            var jsonResponse = JsonSerializer.Serialize(response, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
+            responseQueue.Add(jsonResponse);
+            responseQueue.CompleteAdding();
+            await writerTask.ConfigureAwait(false);
             Environment.Exit(1);
         }
         finally
         {
-            // Ensure proper cleanup of Access COM objects and database connection
-            accessService?.Dispose();
+            accessWorker.Dispose();
+            responseQueue.CompleteAdding();
+            await writerTask.ConfigureAwait(false);
+            FileLogger.Shutdown();
         }
+    }
+
+    static void ResponseWriterLoop(BlockingCollection<string> responseQueue, CancellationToken cancellationToken)
+    {
+        try
+        {
+            foreach (var response in responseQueue.GetConsumingEnumerable(cancellationToken))
+            {
+                Console.WriteLine(response);
+                Console.Out.Flush();
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    static JsonRpcResponse? ProcessRpcMessage(AccessInteropService accessService, string message)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return CreateErrorResponse(null, -32600, "Invalid request");
+
+            var id = ExtractId(root);
+            var method = root.TryGetProperty("method", out var methodElement) && methodElement.ValueKind == JsonValueKind.String
+                ? methodElement.GetString()
+                : null;
+
+            if (string.IsNullOrEmpty(method))
+                return CreateErrorResponse(id, -32600, "Method is required");
+
+            if (method.StartsWith("notifications/") || !root.TryGetProperty("id", out _))
+            {
+                FileLogger.Log($"Ignored notification: {method}");
+                return null;
+            }
+
+            var paramsElement = root.TryGetProperty("params", out var p) ? p : default;
+            object result;
+
+            try
+            {
+                result = method switch
+                {
+                    "initialize" => HandleInitialize(),
+                    "ping" => new { },
+                    "tools/list" => HandleToolsList(),
+                    "tools/call" => HandleToolsCall(accessService, paramsElement),
+                    _ => throw new InvalidOperationException($"Unknown method: {method}")
+                };
+            }
+            catch (ArgumentException ex)
+            {
+                return CreateErrorResponse(id, -32602, ex.Message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return CreateErrorResponse(id, -32603, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return CreateErrorResponse(id, -32603, ex.Message);
+            }
+
+            return new JsonRpcResponse
+            {
+                Id = id,
+                Result = result,
+                Error = null
+            };
+        }
+        catch (JsonException ex)
+        {
+            FileLogger.Log($"JSON parse error: {ex}");
+            return CreateErrorResponse(null, -32700, "Parse error", ex.Message);
+        }
+    }
+
+    static object? ExtractId(string message)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            return ExtractId(document.RootElement);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    static object? ExtractId(JsonElement root)
+    {
+        if (!root.TryGetProperty("id", out var idElement))
+            return null;
+
+        return idElement.ValueKind switch
+        {
+            JsonValueKind.Number => idElement.TryGetInt32(out var intId) ? intId : idElement.GetInt64(),
+            JsonValueKind.String => idElement.GetString(),
+            JsonValueKind.Null => null,
+            _ => idElement.ToString()
+        };
+    }
+
+    static object? JsonElementToObject(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.TryGetInt64(out var longValue) ? longValue : element.GetDouble(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            JsonValueKind.Array => element.EnumerateArray().Select(JsonElementToObject).ToArray(),
+            JsonValueKind.Object => element.EnumerateObject().ToDictionary(p => p.Name, p => JsonElementToObject(p.Value)),
+            _ => element.ToString()
+        };
+    }
+
+    static JsonRpcResponse CreateErrorResponse(object? id, int code, string message, object? data = null)
+    {
+        return new JsonRpcResponse
+        {
+            Id = id,
+            Result = null,
+            Error = new JsonRpcError
+            {
+                Code = code,
+                Message = message,
+                Data = data
+            }
+        };
+    }
+
+    static async Task<string?> ReadRpcMessageAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var firstLine = await ReadLineAsync(stream, cancellationToken);
+        if (firstLine == null)
+            return null;
+
+        if (firstLine.TrimStart().StartsWith("{"))
+            return firstLine;
+
+        if (firstLine.Length > 0)
+        {
+            var headerParts = firstLine.Split(':', 2);
+            if (headerParts.Length == 2)
+                headers[headerParts[0].Trim()] = headerParts[1].Trim();
+        }
+
+        string? line;
+        while (!string.IsNullOrWhiteSpace(line = await ReadLineAsync(stream, cancellationToken)))
+        {
+            var headerParts = line.Split(':', 2);
+            if (headerParts.Length == 2)
+                headers[headerParts[0].Trim()] = headerParts[1].Trim();
+        }
+
+        if (!headers.TryGetValue("Content-Length", out var contentLengthString) || !int.TryParse(contentLengthString, out var contentLength))
+            return null;
+
+        var buffer = new byte[contentLength];
+        var offset = 0;
+        while (offset < contentLength)
+        {
+            var read = await stream.ReadAsync(buffer, offset, contentLength - offset, cancellationToken);
+            if (read == 0)
+                break;
+            offset += read;
+        }
+
+        return Encoding.UTF8.GetString(buffer, 0, offset);
+    }
+
+    static async Task<string?> ReadLineAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var bytes = new List<byte>();
+        var buffer = new byte[1];
+
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, 0, 1, cancellationToken);
+            if (read == 0)
+            {
+                if (bytes.Count == 0)
+                    return null;
+                break;
+            }
+
+            if (buffer[0] == '\n')
+                break;
+
+            if (buffer[0] != '\r')
+                bytes.Add(buffer[0]);
+        }
+
+        return Encoding.UTF8.GetString(bytes.ToArray());
     }
 
     static object HandleInitialize()
@@ -83,7 +477,7 @@ class Program
         return new
         {
             protocolVersion = "2024-11-05",
-            capabilities = new { },
+            capabilities = new { tools = new { } },
             serverInfo = new
             {
                 name = "Access MCP Server",
@@ -98,7 +492,7 @@ class Program
         {
             tools = new object[]
             {
-                new { name = "connect_access", description = "Connect to an Access database", inputSchema = new { type = "object", properties = new { database_path = new { type = "string", description = "Path to the Access database file (.accdb or .mdb)" } } }, required = new string[] { "database_path" } },
+                new { name = "connect_access", description = "Connect to an Access database", inputSchema = new { type = "object", properties = new { database_path = new { type = "string", description = "Path to the Access database file (.accdb or .mdb)" } }, required = new string[] { "database_path" } } },
                 new { name = "disconnect_access", description = "Disconnect from the current Access database", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "is_connected", description = "Check if connected to an Access database", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_tables", description = "Get list of all tables in the database", inputSchema = new { type = "object", properties = new { } } },
@@ -121,6 +515,10 @@ class Program
                 new { name = "compile_vba", description = "Compile VBA code", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_system_tables", description = "Get list of system tables", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_object_metadata", description = "Get metadata for database objects", inputSchema = new { type = "object", properties = new { } } },
+                new { name = "execute_sql", description = "Execute raw SQL against the connected database", inputSchema = new { type = "object", properties = new { sql = new { type = "string" }, mode = new { type = "string", @enum = new string[] { "select", "nonquery", "scalar" } }, parameters = new { type = "array", items = new { type = "object" } } }, required = new string[] { "sql" } } },
+                new { name = "refresh_schema_cache", description = "Refresh cached schema metadata", inputSchema = new { type = "object", properties = new { } } },
+                new { name = "health_check", description = "Verify server health and status", inputSchema = new { type = "object", properties = new { } } },
+                new { name = "server_info", description = "Get server information", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "form_exists", description = "Check if a form exists", inputSchema = new { type = "object", properties = new { form_name = new { type = "string" } }, required = new string[] { "form_name" } } },
                 new { name = "get_form_controls", description = "Get list of controls in a form", inputSchema = new { type = "object", properties = new { form_name = new { type = "string" } }, required = new string[] { "form_name" } } },
                 new { name = "get_control_properties", description = "Get properties of a control", inputSchema = new { type = "object", properties = new { form_name = new { type = "string" }, control_name = new { type = "string" } }, required = new string[] { "form_name", "control_name" } } },
@@ -164,6 +562,10 @@ class Program
             "compile_vba" => HandleCompileVBA(accessService, arguments.GetProperty("arguments")),
             "get_system_tables" => HandleGetSystemTables(accessService, arguments.GetProperty("arguments")),
             "get_object_metadata" => HandleGetObjectMetadata(accessService, arguments.GetProperty("arguments")),
+            "execute_sql" => HandleExecuteSql(accessService, arguments.GetProperty("arguments")),
+            "refresh_schema_cache" => HandleRefreshSchemaCache(accessService, arguments.GetProperty("arguments")),
+            "health_check" => HandleHealthCheck(accessService, arguments.GetProperty("arguments")),
+            "server_info" => HandleServerInfo(accessService, arguments.GetProperty("arguments")),
             "form_exists" => HandleFormExists(accessService, arguments.GetProperty("arguments")),
             "get_form_controls" => HandleGetFormControls(accessService, arguments.GetProperty("arguments")),
             "get_control_properties" => HandleGetControlProperties(accessService, arguments.GetProperty("arguments")),
@@ -174,7 +576,7 @@ class Program
             "export_report_to_text" => HandleExportReportToText(accessService, arguments.GetProperty("arguments")),
             "import_report_from_text" => HandleImportReportFromText(accessService, arguments.GetProperty("arguments")),
             "delete_report" => HandleDeleteReport(accessService, arguments.GetProperty("arguments")),
-            _ => new { error = $"Unknown tool: {toolName}" }
+            _ => throw new InvalidOperationException($"Unknown tool: {toolName}")
         };
     }
 
@@ -204,7 +606,9 @@ class Program
         }
         catch (Exception ex)
         {
-            return new { success = false, error = ex.Message };
+            var full = ex.ToString();
+            FileLogger.Log($"HandleConnectAccess exception: {full}");
+            return new { success = false, error = ex.Message, details = full };
         }
     }
 
@@ -547,6 +951,91 @@ class Program
         }
     }
 
+    static object HandleExecuteSql(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!arguments.TryGetProperty("sql", out var sqlElement) || sqlElement.ValueKind != JsonValueKind.String)
+                return new { success = false, error = "sql parameter is required" };
+
+            var sql = sqlElement.GetString();
+            if (string.IsNullOrWhiteSpace(sql))
+                return new { success = false, error = "sql parameter cannot be empty" };
+
+            var mode = "select";
+            if (arguments.TryGetProperty("mode", out var modeElement) && modeElement.ValueKind == JsonValueKind.String)
+            {
+                mode = modeElement.GetString()?.ToLowerInvariant() ?? "select";
+            }
+
+            List<object?>? parameters = null;
+            if (arguments.TryGetProperty("parameters", out var paramsElement) && paramsElement.ValueKind == JsonValueKind.Array)
+            {
+                parameters = new List<object?>();
+                foreach (var item in paramsElement.EnumerateArray())
+                {
+                    parameters.Add(JsonElementToObject(item));
+                }
+            }
+
+            var result = accessService.ExecuteSql(sql, parameters, mode);
+            return new { success = true, result = result };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleRefreshSchemaCache(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            accessService.RefreshSchemaCache();
+            return new { success = true, message = "Schema cache refreshed" };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleHealthCheck(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            return new
+            {
+                success = true,
+                connected = accessService.IsConnected,
+                uptime = DateTime.UtcNow,
+                server = "Access MCP Server"
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleServerInfo(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            return new
+            {
+                success = true,
+                name = "Access MCP Server",
+                version = "1.0.0",
+                connected = accessService.IsConnected
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
     static object HandleFormExists(AccessInteropService accessService, JsonElement arguments)
     {
         try
@@ -731,7 +1220,7 @@ public class JsonRpcRequest
     public string Jsonrpc { get; set; } = "2.0";
 
     [JsonPropertyName("id")]
-    public int Id { get; set; }
+    public object? Id { get; set; }
 
     [JsonPropertyName("method")]
     public string Method { get; set; } = string.Empty;
@@ -746,8 +1235,23 @@ public class JsonRpcResponse
     public string Jsonrpc { get; set; } = "2.0";
 
     [JsonPropertyName("id")]
-    public int Id { get; set; }
+    public object? Id { get; set; }
 
     [JsonPropertyName("result")]
-    public object Result { get; set; } = new { };
+    public object? Result { get; set; }
+
+    [JsonPropertyName("error")]
+    public JsonRpcError? Error { get; set; }
+}
+
+public class JsonRpcError
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("data")]
+    public object? Data { get; set; }
 }

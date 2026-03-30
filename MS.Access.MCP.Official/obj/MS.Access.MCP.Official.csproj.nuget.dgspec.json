@@ -43,10 +43,6 @@
         "net8.0-windows7.0": {
           "targetAlias": "net8.0-windows",
           "dependencies": {
-            "Microsoft.Office.Interop.Access": {
-              "target": "Package",
-              "version": "[15.0.4420.1018, )"
-            },
             "System.Data.OleDb": {
               "target": "Package",
               "version": "[8.0.0, )"

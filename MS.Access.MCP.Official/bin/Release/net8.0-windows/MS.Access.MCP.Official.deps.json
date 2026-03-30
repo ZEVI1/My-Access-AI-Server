@@ -390,14 +390,6 @@
           }
         }
       },
-      "Microsoft.Office.Interop.Access/15.0.4420.1018": {
-        "runtime": {
-          "lib/netstandard2.0/Microsoft.Office.Interop.Access.dll": {
-            "assemblyVersion": "15.0.0.0",
-            "fileVersion": "15.0.4420.1017"
-          }
-        }
-      },
       "ModelContextProtocol/0.3.0-preview.3": {
         "dependencies": {
           "Microsoft.Extensions.Hosting.Abstractions": "9.0.0",
@@ -532,12 +524,11 @@
       },
       "MS.Access.MCP.Interop/1.0.0": {
         "dependencies": {
-          "Microsoft.Office.Interop.Access": "15.0.4420.1018",
           "System.Data.OleDb": "8.0.0"
         },
         "runtime": {
           "MS.Access.MCP.Interop.dll": {
-            "assemblyVersion": "1.0.0.0",
+            "assemblyVersion": "1.0.0",
             "fileVersion": "1.0.0.0"
           }
         }
@@ -745,13 +736,6 @@
       "sha512": "sha512-N3qEBzmLMYiASUlKxxFIISP4AiwuPTHF5uCh+2CWSwwzAJiIYx0kBJsS30cp1nvhSySFAVi30jecD307jV+8Kg==",
       "path": "microsoft.extensions.primitives/9.0.0",
       "hashPath": "microsoft.extensions.primitives.9.0.0.nupkg.sha512"
-    },
-    "Microsoft.Office.Interop.Access/15.0.4420.1018": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-toqhe19vn4/HLJrAiCYMSO2NPGSTBjSQ+o9j7gNBnVo//2cDxD61s3Rb0FdOMnPMxX8NTRiNhDju4KOuIE39rA==",
-      "path": "microsoft.office.interop.access/15.0.4420.1018",
-      "hashPath": "microsoft.office.interop.access.15.0.4420.1018.nupkg.sha512"
     },
     "ModelContextProtocol/0.3.0-preview.3": {
       "type": "package",

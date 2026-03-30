@@ -1,6 +1,12 @@
+using System.Data;
 using System.Data.OleDb;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Reflection;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Text;
 
 namespace MS.Access.MCP.Interop
 {
@@ -11,8 +17,15 @@ namespace MS.Access.MCP.Interop
         private bool _disposed = false;
 
         // COM Automation fields
-        private dynamic? _accessApplication;  // Microsoft.Office.Interop.Access.Application
-        private dynamic? _currentDatabase;     // Microsoft.Office.Interop.Access.Database
+        private object? _accessApplication;  // Late-bound Access.Application COM object
+        private object? _currentDatabase;     // Late-bound Access.Database COM object
+
+        // Schema cache
+        private List<TableInfo>? _cachedTables;
+        private List<QueryInfo>? _cachedQueries;
+        private List<RelationshipInfo>? _cachedRelationships;
+        private List<SystemTableInfo>? _cachedSystemTables;
+        private readonly object _schemaCacheLock = new();
 
         #region 1. Connection Management
 
@@ -25,36 +38,32 @@ namespace MS.Access.MCP.Interop
             
             try
             {
-                // Initialize COM Automation - Launch Access Application
-                _accessApplication = new Microsoft.Office.Interop.Access.Application();
-                _accessApplication.Visible = false;  // Run in background
-                
-                // Open the database using COM Automation
-                var dbEngine = _accessApplication.DBEngine;
-                _currentDatabase = dbEngine.OpenDatabase(databasePath);
-                
-                // Also create OleDb connection for direct data access
+                // Use OleDb for connection to avoid COM interop dependency during connect
+                FileLogger.Log("AccessInteropService.Connect: opening OleDb connection");
                 var connectionString = $"Provider=Microsoft.ACE.OLEDB.12.0;Data Source={databasePath};";
                 _oleDbConnection = new OleDbConnection(connectionString);
                 _oleDbConnection.Open();
+                FileLogger.Log($"AccessInteropService.Connect: connected to '{databasePath}'.");
+
+                // Do not require Access.Application during initial connection
+                _accessApplication = null;
+                _currentDatabase = null;
+                InvalidateSchemaCache();
             }
             catch (Exception ex)
             {
                 // Clean up on failure
-                if (_currentDatabase != null)
+                if (_oleDbConnection != null)
                 {
-                    try { Marshal.ReleaseComObject(_currentDatabase); }
+                    try {
+                        _oleDbConnection.Close();
+                        _oleDbConnection.Dispose();
+                    }
                     catch { }
-                    _currentDatabase = null;
+                    _oleDbConnection = null;
                 }
-                if (_accessApplication != null)
-                {
-                    try { _accessApplication.Quit(); }
-                    catch { }
-                    try { Marshal.ReleaseComObject(_accessApplication); }
-                    catch { }
-                    _accessApplication = null;
-                }
+
+                FileLogger.Log($"AccessInteropService.Connect: failed to connect to database: {ex.Message}");
                 throw new InvalidOperationException($"Failed to connect to database: {ex.Message}", ex);
             }
         }
@@ -63,6 +72,7 @@ namespace MS.Access.MCP.Interop
         {
             try
             {
+                FileLogger.Log("AccessInteropService.Disconnect: starting cleanup.");
                 // Close OleDb connection first
                 if (_oleDbConnection != null)
                 {
@@ -73,7 +83,7 @@ namespace MS.Access.MCP.Interop
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"Error closing OleDb connection: {ex.Message}");
+                        FileLogger.Log($"Error closing OleDb connection: {ex.Message}");
                     }
                     _oleDbConnection = null;
                 }
@@ -84,14 +94,18 @@ namespace MS.Access.MCP.Interop
                 {
                     try
                     {
-                        _currentDatabase.Close();
-                        Marshal.ReleaseComObject(_currentDatabase);
+                        var databaseType = _currentDatabase.GetType();
+                        databaseType.InvokeMember("Close", BindingFlags.InvokeMethod, null, _currentDatabase, null);
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"Error closing database: {ex.Message}");
+                        FileLogger.Log($"Error closing database: {ex.Message}");
                     }
-                    _currentDatabase = null;
+                    finally
+                    {
+                        ReleaseComObjectSafe(_currentDatabase);
+                        _currentDatabase = null;
+                    }
                 }
 
                 // 2. Quit Access Application
@@ -99,21 +113,101 @@ namespace MS.Access.MCP.Interop
                 {
                     try
                     {
-                        _accessApplication.Quit();
-                        Marshal.ReleaseComObject(_accessApplication);
+                        var accessType = _accessApplication.GetType();
+
+                        try
+                        {
+                            var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+                            ReleaseComObjectSafe(forms);
+                        }
+                        catch { }
+
+                        try
+                        {
+                            var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
+                            ReleaseComObjectSafe(reports);
+                        }
+                        catch { }
+
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"Error quitting Access: {ex.Message}");
+                        FileLogger.Log($"Error quitting Access: {ex.Message}");
                     }
-                    _accessApplication = null;
+                    finally
+                    {
+                        ReleaseComObjectSafe(_accessApplication);
+                        _accessApplication = null;
+                    }
                 }
 
                 _currentDatabasePath = null;
+                InvalidateSchemaCache();
+                FileLogger.Log("AccessInteropService.Disconnect: cleanup complete.");
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Error during disconnect: {ex.Message}");
+                FileLogger.Log($"Error during disconnect: {ex.Message}");
+            }
+        }
+
+        private void InvalidateSchemaCache()
+        {
+            lock (_schemaCacheLock)
+            {
+                _cachedTables = null;
+                _cachedQueries = null;
+                _cachedRelationships = null;
+                _cachedSystemTables = null;
+            }
+        }
+
+        public void RefreshSchemaCache()
+        {
+            lock (_schemaCacheLock)
+            {
+                _cachedTables = null;
+                _cachedQueries = null;
+                _cachedRelationships = null;
+                _cachedSystemTables = null;
+            }
+
+            _ = GetTables();
+            _ = GetQueries();
+            _ = GetRelationships();
+            _ = GetSystemTables();
+        }
+
+        private static void ReleaseComObjectSafe(object? comObject)
+        {
+            if (comObject == null)
+                return;
+
+            try
+            {
+                while (Marshal.ReleaseComObject(comObject) > 0) { }
+            }
+            catch { }
+        }
+
+        private dynamic? EnsureAccessApplication()
+        {
+            if (_accessApplication != null)
+                return _accessApplication;
+
+            if (string.IsNullOrEmpty(_currentDatabasePath))
+                return null;
+
+            try
+            {
+                LaunchAccess();
+                return _accessApplication;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"EnsureAccessApplication failed: {ex.Message}");
+                return null;
             }
         }
 
@@ -126,6 +220,12 @@ namespace MS.Access.MCP.Interop
         public List<TableInfo> GetTables()
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
+            lock (_schemaCacheLock)
+            {
+                if (_cachedTables != null)
+                    return _cachedTables;
+            }
 
             var tables = new List<TableInfo>();
             
@@ -147,6 +247,11 @@ namespace MS.Access.MCP.Interop
                 }
             }
 
+            lock (_schemaCacheLock)
+            {
+                _cachedTables = tables;
+            }
+
             return tables;
         }
 
@@ -154,31 +259,169 @@ namespace MS.Access.MCP.Interop
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
+            lock (_schemaCacheLock)
+            {
+                if (_cachedQueries != null)
+                    return _cachedQueries;
+            }
+
             var queries = new List<QueryInfo>();
-            
-            // Use OleDb to get query information
             var schema = _oleDbConnection!.GetSchema("Views");
-            
+
             foreach (System.Data.DataRow row in schema.Rows)
             {
-                var queryName = row["TABLE_NAME"].ToString();
-                if (!string.IsNullOrEmpty(queryName))
+                var queryName = row["TABLE_NAME"]?.ToString();
+                if (string.IsNullOrEmpty(queryName))
+                    continue;
+
+                string sql = string.Empty;
+                dynamic? currentDb = null;
+                dynamic? queryDef = null;
+                try
                 {
-                    queries.Add(new QueryInfo
+                    var accessApp = EnsureAccessApplication();
+                    if (accessApp != null)
                     {
-                        Name = queryName,
-                        SQL = "", // SQL not available through schema
-                        Type = "Query"
-                    });
+                        currentDb = accessApp.CurrentDb();
+                        queryDef = currentDb.QueryDefs[queryName];
+                        if (queryDef != null)
+                        {
+                            sql = queryDef.SQL ?? string.Empty;
+                        }
+                    }
                 }
+                catch { }
+                finally
+                {
+                    ReleaseComObjectSafe(queryDef);
+                    ReleaseComObjectSafe(currentDb);
+                }
+
+                queries.Add(new QueryInfo
+                {
+                    Name = queryName,
+                    SQL = sql,
+                    Type = "Query"
+                });
+            }
+
+            lock (_schemaCacheLock)
+            {
+                _cachedQueries = queries;
             }
 
             return queries;
         }
 
+        public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
+        {
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+            if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
+
+            sql = sql.Trim();
+            if (sql.EndsWith(";"))
+                sql = sql.TrimEnd(';').TrimEnd();
+
+            if (sql.IndexOf(';') >= 0)
+                throw new InvalidOperationException("Multiple SQL statements are not allowed.");
+
+            var normalizedMode = mode?.Trim().ToLowerInvariant() ?? "select";
+            if (normalizedMode != "select" && normalizedMode != "nonquery" && normalizedMode != "scalar")
+                throw new ArgumentException("Invalid SQL execution mode. Allowed values are select, nonquery, scalar.", nameof(mode));
+
+            var placeholderCount = 0;
+            foreach (var ch in sql)
+            {
+                if (ch == '?')
+                    placeholderCount++;
+            }
+
+            if (parameters != null && placeholderCount != parameters.Count)
+                throw new ArgumentException($"SQL parameter count mismatch. Expected {placeholderCount}, got {parameters.Count}.", nameof(parameters));
+
+            using var command = new OleDbCommand(sql, _oleDbConnection)
+            {
+                CommandType = CommandType.Text
+            };
+
+            if (parameters != null)
+            {
+                foreach (var parameter in parameters)
+                {
+                    command.Parameters.Add(CreateOleDbParameter(parameter));
+                }
+            }
+
+            if (normalizedMode == "scalar")
+            {
+                return command.ExecuteScalar();
+            }
+
+            if (normalizedMode == "nonquery")
+            {
+                return command.ExecuteNonQuery();
+            }
+
+            using var reader = command.ExecuteReader();
+            var rows = new List<Dictionary<string, object?>>();
+            while (reader.Read())
+            {
+                var row = new Dictionary<string, object?>();
+                for (int i = 0; i < reader.FieldCount; i++)
+                {
+                    var name = reader.GetName(i);
+                    var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                    row[name] = value;
+                }
+                rows.Add(row);
+            }
+            return rows;
+        }
+
+        private static OleDbParameter CreateOleDbParameter(object? value)
+        {
+            var parameter = new OleDbParameter
+            {
+                Value = value ?? DBNull.Value,
+                OleDbType = GetOleDbTypeForValue(value)
+            };
+
+            if (parameter.OleDbType == OleDbType.VarChar)
+            {
+                parameter.Size = 4000;
+            }
+
+            return parameter;
+        }
+
+        private static OleDbType GetOleDbTypeForValue(object? value)
+        {
+            return value switch
+            {
+                null => OleDbType.VarChar,
+                string => OleDbType.VarChar,
+                int => OleDbType.Integer,
+                long => OleDbType.BigInt,
+                bool => OleDbType.Boolean,
+                DateTime => OleDbType.Date,
+                decimal => OleDbType.Decimal,
+                double => OleDbType.Double,
+                float => OleDbType.Single,
+                byte[] => OleDbType.Binary,
+                Guid => OleDbType.Guid,
+                _ => OleDbType.VarChar,
+            };
+        }
+
         public List<RelationshipInfo> GetRelationships()
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
+            lock (_schemaCacheLock)
+            {
+                if (_cachedRelationships != null)
+                    return _cachedRelationships;
+            }
 
             var relationships = new List<RelationshipInfo>();
             
@@ -194,6 +437,11 @@ namespace MS.Access.MCP.Interop
                     ForeignTable = row["REFERENCED_TABLE_NAME"]?.ToString() ?? "",
                     Attributes = ""
                 });
+            }
+
+            lock (_schemaCacheLock)
+            {
+                _cachedRelationships = relationships;
             }
 
             return relationships;
@@ -232,14 +480,83 @@ namespace MS.Access.MCP.Interop
 
         public void LaunchAccess()
         {
-            // This would require full COM interop - simplified for now
-            Console.WriteLine("Access launch functionality requires full COM interop");
+            if (_accessApplication != null)
+            {
+                FileLogger.Log("AccessInteropService.LaunchAccess: Access is already launched.");
+                return;
+            }
+
+            var accessType = Type.GetTypeFromProgID("Access.Application");
+            if (accessType == null)
+                throw new InvalidOperationException("Microsoft Access is not installed on this system.");
+
+            FileLogger.Log("AccessInteropService.LaunchAccess: creating Access application via ProgID");
+            _accessApplication = Activator.CreateInstance(accessType);
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Failed to instantiate Access.Application via ProgID.");
+
+            try
+            {
+                accessType.InvokeMember("Visible", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
+            }
+            catch { }
+
+            try
+            {
+                accessType.InvokeMember("AutomationSecurity", BindingFlags.SetProperty, null, _accessApplication, new object[] { 3 });
+            }
+            catch { }
+
+            try
+            {
+                accessType.InvokeMember("UserControl", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
+            }
+            catch { }
+
+            try
+            {
+                accessType.InvokeMember("DisplayAlerts", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
+            }
+            catch { }
+
+            if (!string.IsNullOrEmpty(_currentDatabasePath))
+            {
+                try
+                {
+                    FileLogger.Log($"AccessInteropService.LaunchAccess: opening current database '{_currentDatabasePath}' in Access application");
+                    accessType.InvokeMember("OpenCurrentDatabase", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { _currentDatabasePath });
+                    FileLogger.Log("AccessInteropService.LaunchAccess: database opened successfully in Access application.");
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"AccessInteropService.LaunchAccess: failed to open database in Access app ({ex.Message})");
+                }
+            }
         }
 
         public void CloseAccess()
         {
-            // This would require full COM interop - simplified for now
-            Console.WriteLine("Access close functionality requires full COM interop");
+            if (_accessApplication == null)
+            {
+                FileLogger.Log("AccessInteropService.CloseAccess: Access is not launched.");
+                return;
+            }
+
+            try
+            {
+                var accessType = _accessApplication.GetType();
+                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"Error quitting Access: {ex.Message}");
+            }
+            finally
+            {
+                ReleaseComObjectSafe(_accessApplication);
+                _accessApplication = null;
+                _currentDatabase = null;
+            }
         }
 
         public List<FormInfo> GetForms()
@@ -367,17 +684,21 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
             if (string.IsNullOrEmpty(formName))
                 throw new ArgumentException("Form name is required", nameof(formName));
 
             try
             {
                 // acForm = 2, acNormal = 0
-                _accessApplication?.DoCmd.OpenForm(formName, 2, null, null, 0);
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
+                doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { formName, 2, null, null, 0 });
             }
-            catch (COMException comEx)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to open form '{formName}': {comEx.Message}", comEx);
+                throw new InvalidOperationException($"Failed to open form '{formName}': {ex.Message}", ex);
             }
         }
 
@@ -386,17 +707,21 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
             if (string.IsNullOrEmpty(formName))
                 throw new ArgumentException("Form name is required", nameof(formName));
 
             try
             {
                 // acForm = 2, acSaveYes = 1
-                _accessApplication?.DoCmd.Close(2, formName, 1);
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
+                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
             }
-            catch (COMException comEx)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to close form '{formName}': {comEx.Message}", comEx);
+                throw new InvalidOperationException($"Failed to close form '{formName}': {ex.Message}", ex);
             }
         }
 
@@ -405,27 +730,32 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
             if (string.IsNullOrEmpty(formName))
                 throw new ArgumentException("Form name is required", nameof(formName));
 
             if (FormExists(formName))
                 throw new InvalidOperationException($"Form '{formName}' already exists.");
 
-            dynamic? form = null;
+            object? form = null;
 
             try
             {
-                form = _accessApplication?.CreateForm();
+                form = _accessApplication.GetType().InvokeMember("CreateForm", BindingFlags.InvokeMethod, null, _accessApplication, null);
                 if (form == null)
                     throw new InvalidOperationException("Failed to create form.");
 
-                form.Name = formName;
-                form.Visible = false;
-                _accessApplication?.DoCmd.Close(2, formName, 1);
+                form.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, form, new object[] { formName });
+                form.GetType().InvokeMember("Visible", BindingFlags.SetProperty, null, form, new object[] { false });
+
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
+                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
             }
-            catch (COMException comEx)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to create form '{formName}': {comEx.Message}", comEx);
+                throw new InvalidOperationException($"Failed to create form '{formName}': {ex.Message}", ex);
             }
             finally
             {
@@ -483,26 +813,31 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
             if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
                 throw new ArgumentException("Project name and module name are required.");
 
             try
             {
-                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                var currentProject = _accessApplication.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, _accessApplication, null);
+                var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
                 if (vbeProject == null)
                     throw new InvalidOperationException("Access VBProject not available.");
 
-                dynamic component = vbeProject.VBComponents[moduleName];
+                var vbComponents = vbeProject.GetType().InvokeMember("VBComponents", BindingFlags.GetProperty, null, vbeProject, null);
+                var component = vbComponents.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, vbComponents, new object[] { moduleName });
                 if (component == null)
                     throw new InvalidOperationException($"Module '{moduleName}' not found.");
 
-                dynamic codeModule = component.CodeModule;
-                var lineCount = (int)codeModule.CountOfLines;
-                return (string)codeModule.Lines(1, lineCount);
+                var codeModule = component.GetType().InvokeMember("CodeModule", BindingFlags.GetProperty, null, component, null);
+                var lineCount = (int)codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null);
+                return (string)codeModule.GetType().InvokeMember("Lines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, lineCount });
             }
-            catch (COMException comEx)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to get VBA code for module '{moduleName}': {comEx.Message}", comEx);
+                throw new InvalidOperationException($"Failed to get VBA code for module '{moduleName}': {ex.Message}", ex);
             }
         }
 
@@ -511,31 +846,36 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
             if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
                 throw new ArgumentException("Project name and module name are required.");
 
             try
             {
-                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                var currentProject = _accessApplication.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, _accessApplication, null);
+                var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
                 if (vbeProject == null)
                     throw new InvalidOperationException("Access VBProject not available.");
 
-                dynamic component = vbeProject.VBComponents[moduleName];
+                var vbComponents = vbeProject.GetType().InvokeMember("VBComponents", BindingFlags.GetProperty, null, vbeProject, null);
+                var component = vbComponents.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, vbComponents, new object[] { moduleName });
                 if (component == null)
                     throw new InvalidOperationException($"Module '{moduleName}' not found.");
 
-                dynamic codeModule = component.CodeModule;
-                var lineCount = (int)codeModule.CountOfLines;
+                var codeModule = component.GetType().InvokeMember("CodeModule", BindingFlags.GetProperty, null, component, null);
+                var countOfLines = (int)codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null);
 
-                if (lineCount > 0)
-                    codeModule.DeleteLines(1, lineCount);
+                if (countOfLines > 0)
+                    codeModule.GetType().InvokeMember("DeleteLines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, countOfLines });
 
                 if (!string.IsNullOrEmpty(code))
-                    codeModule.AddFromString(code);
+                    codeModule.GetType().InvokeMember("AddFromString", BindingFlags.InvokeMethod, null, codeModule, new object[] { code });
             }
-            catch (COMException comEx)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to set VBA code for module '{moduleName}': {comEx.Message}", comEx);
+                throw new InvalidOperationException($"Failed to set VBA code for module '{moduleName}': {ex.Message}", ex);
             }
         }
 
@@ -555,7 +895,11 @@ namespace MS.Access.MCP.Interop
 
             try
             {
-                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                dynamic accessApp = (dynamic?)_accessApplication;
+                if (accessApp == null)
+                    throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
+                dynamic vbeProject = accessApp.CurrentProject?.VBProject;
                 if (vbeProject == null)
                     throw new InvalidOperationException("Access VBProject not available.");
 
@@ -582,13 +926,17 @@ namespace MS.Access.MCP.Interop
 
             try
             {
-                dynamic vbeProject = _accessApplication?.CurrentProject?.VBProject;
+                dynamic accessApp = (dynamic?)_accessApplication;
+                if (accessApp == null)
+                    throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
+                dynamic vbeProject = accessApp.CurrentProject?.VBProject;
                 if (vbeProject == null)
                     throw new InvalidOperationException("Access VBProject not available.");
 
                 // Attempt to compile by executing the Access menu command for VBA compile
                 // acCmdCompile = 602 or 211? use RunCommand constant 356
-                _accessApplication?.DoCmd.RunCommand(600); // acCmdCompile may vary; if invalid, catches
+                accessApp.DoCmd.RunCommand(600); // acCmdCompile may vary; if invalid, catches
             }
             catch (COMException comEx)
             {
@@ -604,22 +952,63 @@ namespace MS.Access.MCP.Interop
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
-            var systemTables = new List<SystemTableInfo>();
-            var schema = _oleDbConnection!.GetSchema("Tables");
-            
-            foreach (System.Data.DataRow row in schema.Rows)
+            lock (_schemaCacheLock)
             {
-                var tableName = row["TABLE_NAME"].ToString();
-                if (!string.IsNullOrEmpty(tableName) && (tableName.StartsWith("~") || tableName.StartsWith("MSys")))
+                if (_cachedSystemTables != null)
+                    return _cachedSystemTables;
+            }
+
+            var systemTables = new List<SystemTableInfo>();
+            try
+            {
+                using var command = new OleDbCommand(
+                    "SELECT Name, DateCreate, DateUpdate FROM MSysObjects WHERE Name LIKE 'MSys%' OR Name LIKE '~%';",
+                    _oleDbConnection);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
                 {
+                    var name = reader["Name"]?.ToString() ?? string.Empty;
+                    if (string.IsNullOrEmpty(name))
+                        continue;
+
+                    DateTime created = DateTime.MinValue;
+                    DateTime updated = DateTime.MinValue;
+
+                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch { }
+                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch { }
+
                     systemTables.Add(new SystemTableInfo
                     {
-                        Name = tableName,
-                        DateCreated = DateTime.Now, // Not available through OleDb
-                        LastUpdated = DateTime.Now, // Not available through OleDb
-                        RecordCount = GetTableRecordCount(tableName)
+                        Name = name,
+                        DateCreated = created,
+                        LastUpdated = updated,
+                        RecordCount = GetTableRecordCount(name)
                     });
                 }
+            }
+            catch
+            {
+                // MSysObjects may be restricted; fallback to schema names with default timestamps
+                var schema = _oleDbConnection!.GetSchema("Tables");
+                foreach (System.Data.DataRow row in schema.Rows)
+                {
+                    var tableName = row["TABLE_NAME"]?.ToString();
+                    if (!string.IsNullOrEmpty(tableName) && (tableName.StartsWith("~") || tableName.StartsWith("MSys")))
+                    {
+                        systemTables.Add(new SystemTableInfo
+                        {
+                            Name = tableName,
+                            DateCreated = DateTime.MinValue,
+                            LastUpdated = DateTime.MinValue,
+                            RecordCount = GetTableRecordCount(tableName)
+                        });
+                    }
+                }
+            }
+
+            lock (_schemaCacheLock)
+            {
+                _cachedSystemTables = systemTables;
             }
 
             return systemTables;
@@ -686,46 +1075,48 @@ namespace MS.Access.MCP.Interop
             if (string.IsNullOrEmpty(formName))
                 throw new ArgumentException("Form name is required", nameof(formName));
 
-            var app = _accessApplication ?? throw new InvalidOperationException("Access application is not initialized.");
-            var controls = new List<ControlInfo>();
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not initialized.");
+
+            var controlsInfo = new List<ControlInfo>();
 
             try
             {
-                dynamic form = app.Forms[formName];
+                var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+                var controls = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null);
+                var count = Convert.ToInt32(controls.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
 
-                foreach (dynamic control in form.Controls)
+                for (int i = 1; i <= count; i++)
                 {
                     try
                     {
-                        controls.Add(new ControlInfo
+                        var control = controls.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, controls, new object[] { i });
+                        controlsInfo.Add(new ControlInfo
                         {
-                            Name = control.Name ?? "",
-                            Type = control.ControlType?.ToString() ?? "",
-                            Left = Convert.ToInt32(control.Left),
-                            Top = Convert.ToInt32(control.Top),
-                            Width = Convert.ToInt32(control.Width),
-                            Height = Convert.ToInt32(control.Height),
-                            Visible = control.Visible ?? true,
-                            Enabled = control.Enabled ?? true
+                            Name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
+                            Type = Convert.ToString(control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)) ?? "",
+                            Left = Convert.ToInt32(control.GetType().InvokeMember("Left", BindingFlags.GetProperty, null, control, null)),
+                            Top = Convert.ToInt32(control.GetType().InvokeMember("Top", BindingFlags.GetProperty, null, control, null)),
+                            Width = Convert.ToInt32(control.GetType().InvokeMember("Width", BindingFlags.GetProperty, null, control, null)),
+                            Height = Convert.ToInt32(control.GetType().InvokeMember("Height", BindingFlags.GetProperty, null, control, null)),
+                            Visible = Convert.ToBoolean(control.GetType().InvokeMember("Visible", BindingFlags.GetProperty, null, control, null)),
+                            Enabled = Convert.ToBoolean(control.GetType().InvokeMember("Enabled", BindingFlags.GetProperty, null, control, null))
                         });
                     }
-                    catch (COMException comEx)
+                    catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"Error reading control properties: {comEx.Message}");
+                        FileLogger.Log($"Error reading control properties: {ex.Message}");
                         continue;
                     }
                 }
             }
-            catch (COMException comEx)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to enumerate controls in form '{formName}': {comEx.Message}", comEx);
-            }
-            catch (ArgumentException argEx)
-            {
-                throw new InvalidOperationException($"Form '{formName}' not found: {argEx.Message}", argEx);
+                throw new InvalidOperationException($"Failed to enumerate controls in form '{formName}': {ex.Message}", ex);
             }
 
-            return controls;
+            return controlsInfo;
         }
 
         public ControlProperties GetControlProperties(string formName, string controlName)
@@ -733,20 +1124,22 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not initialized.");
+
             if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
                 throw new ArgumentException("Form name and control name are required.");
 
-            var app = _accessApplication ?? throw new InvalidOperationException("Access application is not initialized.");
-
             try
             {
-                dynamic form = app.Forms[formName];
-                dynamic control = form.Controls[controlName];
+                var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+                var control = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null).GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null), new object[] { controlName });
 
                 var properties = new ControlProperties
                 {
-                    Name = control.Name ?? "",
-                    Type = control.ControlType?.ToString() ?? "",
+                    Name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
+                    Type = Convert.ToString(control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)) ?? "",
                     Left = SafeGetInt32(control, "Left", 0),
                     Top = SafeGetInt32(control, "Top", 0),
                     Width = SafeGetInt32(control, "Width", 100),
@@ -763,17 +1156,11 @@ namespace MS.Access.MCP.Interop
 
                 return properties;
             }
-            catch (COMException comEx)
+            catch (Exception ex)
             {
                 throw new InvalidOperationException(
-                    $"Failed to get properties for control '{controlName}' in form '{formName}': {comEx.Message}", 
-                    comEx);
-            }
-            catch (ArgumentException argEx)
-            {
-                throw new InvalidOperationException(
-                    $"Control '{controlName}' not found in form '{formName}': {argEx.Message}", 
-                    argEx);
+                    $"Failed to get properties for control '{controlName}' in form '{formName}': {ex.Message}", 
+                    ex);
             }
         }
 
@@ -782,27 +1169,23 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not initialized.");
+
             if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName) || string.IsNullOrEmpty(propertyName))
                 throw new ArgumentException("Form name, control name, and property name are required.");
 
-            var app = _accessApplication ?? throw new InvalidOperationException("Access application is not initialized.");
-
             try
             {
-                dynamic form = app.Forms[formName];
-                dynamic control = form.Controls[controlName];
+                var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+                var control = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null).GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null), new object[] { controlName });
 
                 control.GetType().InvokeMember(propertyName,
-                    System.Reflection.BindingFlags.SetProperty,
+                    BindingFlags.SetProperty,
                     null,
                     control,
                     new object[] { value });
-            }
-            catch (COMException comEx)
-            {
-                throw new InvalidOperationException(
-                    $"COM error setting property '{propertyName}' to '{value}' on control '{controlName}': {comEx.Message}",
-                    comEx);
             }
             catch (System.Reflection.TargetInvocationException ex)
             {
@@ -810,16 +1193,16 @@ namespace MS.Access.MCP.Interop
                     $"Failed to set property '{propertyName}' on control '{controlName}': {ex.InnerException?.Message}",
                     ex);
             }
-            catch (ArgumentException argEx)
+            catch (Exception ex)
             {
                 throw new InvalidOperationException(
-                    $"Control '{controlName}' not found in form '{formName}': {argEx.Message}",
-                    argEx);
+                    $"Failed to set property '{propertyName}' on control '{controlName}': {ex.Message}",
+                    ex);
             }
         }
 
         // Helper methods to safely extract properties with fallback values
-        private int SafeGetInt32(dynamic obj, string propertyName, int defaultValue)
+        private int SafeGetInt32(object obj, string propertyName, int defaultValue)
         {
             try
             {
@@ -837,7 +1220,7 @@ namespace MS.Access.MCP.Interop
             }
         }
 
-        private bool SafeGetBool(dynamic obj, string propertyName, bool defaultValue)
+        private bool SafeGetBool(object obj, string propertyName, bool defaultValue)
         {
             try
             {
@@ -851,7 +1234,7 @@ namespace MS.Access.MCP.Interop
             }
         }
 
-        private string SafeGetString(dynamic obj, string propertyName, string defaultValue)
+        private string SafeGetString(object obj, string propertyName, string defaultValue)
         {
             try
             {
@@ -891,16 +1274,44 @@ namespace MS.Access.MCP.Interop
             var formInfo = JsonSerializer.Deserialize<FormExportData>(formData);
             if (formInfo == null) throw new ArgumentException("Invalid form data");
 
-            // Simplified form import - would require full COM interop for actual form creation
-            Console.WriteLine($"Form {formInfo.Name} would be imported here");
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
+            dynamic? form = null;
+            try
+            {
+                dynamic accessApp = _accessApplication;
+                form = accessApp.CreateForm();
+                form.Name = formInfo.Name;
+                form.Visible = false;
+                accessApp.DoCmd.Save(2, formInfo.Name);
+                accessApp.DoCmd.Close(2, formInfo.Name, 1);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to import form '{formInfo.Name}': {ex.Message}", ex);
+            }
+            finally
+            {
+                ReleaseComObjectSafe(form);
+            }
         }
 
         public void DeleteForm(string formName)
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
-            
-            // This would require full COM interop - simplified for now
-            Console.WriteLine($"Form {formName} would be deleted here");
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
+            try
+            {
+                dynamic accessApp = _accessApplication;
+                accessApp.DoCmd.DeleteObject(2, formName);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to delete form '{formName}': {ex.Message}", ex);
+            }
         }
 
         public string ExportReportToText(string reportName)
@@ -924,16 +1335,44 @@ namespace MS.Access.MCP.Interop
             var reportInfo = JsonSerializer.Deserialize<ReportExportData>(reportData);
             if (reportInfo == null) throw new ArgumentException("Invalid report data");
 
-            // Simplified report import - would require full COM interop for actual report creation
-            Console.WriteLine($"Report {reportInfo.Name} would be imported here");
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
+            dynamic? report = null;
+            try
+            {
+                dynamic accessApp = _accessApplication;
+                report = accessApp.CreateReport();
+                report.Name = reportInfo.Name;
+                report.Visible = false;
+                accessApp.DoCmd.Save(3, reportInfo.Name);
+                accessApp.DoCmd.Close(3, reportInfo.Name, 1);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to import report '{reportInfo.Name}': {ex.Message}", ex);
+            }
+            finally
+            {
+                ReleaseComObjectSafe(report);
+            }
         }
 
         public void DeleteReport(string reportName)
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
-            
-            // This would require full COM interop - simplified for now
-            Console.WriteLine($"Report {reportName} would be deleted here");
+            if (_accessApplication == null)
+                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+
+            try
+            {
+                dynamic accessApp = _accessApplication;
+                accessApp.DoCmd.DeleteObject(3, reportName);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to delete report '{reportName}': {ex.Message}", ex);
+            }
         }
 
         #endregion
@@ -1134,6 +1573,77 @@ namespace MS.Access.MCP.Interop
         public string Name { get; set; } = "";
         public DateTime ExportedAt { get; set; }
         public List<ControlInfo> Controls { get; set; } = new();
+    }
+
+    public static class FileLogger
+    {
+        private static readonly string LogPath = Path.Combine(AppContext.BaseDirectory, "mcp_server.log");
+        private static readonly BlockingCollection<string> Queue = new(new ConcurrentQueue<string>());
+        private static readonly Task BackgroundWriter;
+        private static readonly JsonSerializerOptions SerializerOptions = new()
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false
+        };
+
+        static FileLogger()
+        {
+            try
+            {
+                var logDirectory = Path.GetDirectoryName(LogPath);
+                if (!string.IsNullOrEmpty(logDirectory))
+                    Directory.CreateDirectory(logDirectory);
+            }
+            catch { }
+
+            BackgroundWriter = Task.Factory.StartNew(() =>
+            {
+                foreach (var entry in Queue.GetConsumingEnumerable())
+                {
+                    try
+                    {
+                        File.AppendAllText(LogPath, entry + Environment.NewLine, Encoding.UTF8);
+                    }
+                    catch { }
+                }
+            }, TaskCreationOptions.LongRunning);
+        }
+
+        public static void Log(string message)
+        {
+            Log(new { level = "Information", @event = "LogMessage", message });
+        }
+
+        public static void Log(string level, string eventName, object? data = null)
+        {
+            Log(new
+            {
+                timestamp = DateTime.UtcNow,
+                level,
+                @event = eventName,
+                data
+            });
+        }
+
+        public static void Log(object payload)
+        {
+            try
+            {
+                var line = JsonSerializer.Serialize(payload, SerializerOptions);
+                Queue.Add(line);
+            }
+            catch { }
+        }
+
+        public static void Shutdown()
+        {
+            try
+            {
+                Queue.CompleteAdding();
+                BackgroundWriter.Wait(1000);
+            }
+            catch { }
+        }
     }
 
     #endregion

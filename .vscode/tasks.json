@@ -1,0 +1,48 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build MCP Official",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "My-Access-AI-Server.sln",
+        "-c",
+        "Release"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Publish MCP Official",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "publish",
+        "MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj",
+        "-c",
+        "Release",
+        "-r",
+        "win-x64",
+        "--self-contained",
+        "false",
+        "-o",
+        ".\\publish"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": ["$msCompile"]
+    }
+  ]
+}

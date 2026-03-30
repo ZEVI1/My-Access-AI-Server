@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch MCP Official",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/publish/MS.Access.MCP.Official.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Build MCP Official",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "justMyCode": false
+    }
+  ]
+}

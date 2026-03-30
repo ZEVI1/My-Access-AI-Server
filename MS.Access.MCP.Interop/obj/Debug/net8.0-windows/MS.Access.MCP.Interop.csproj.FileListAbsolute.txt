@@ -22,7 +22,6 @@ C:\My-Access-AI-Server\MS.Access.MCP.Interop\bin\Debug\net8.0-windows\MS.Access.
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\bin\Debug\net8.0-windows\MS.Access.MCP.Interop.runtimeconfig.json
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\bin\Debug\net8.0-windows\MS.Access.MCP.Interop.dll
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\bin\Debug\net8.0-windows\MS.Access.MCP.Interop.pdb
-C:\My-Access-AI-Server\MS.Access.MCP.Interop\bin\Debug\net8.0-windows\Microsoft.Office.Interop.Access.dll
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\bin\Debug\net8.0-windows\System.Data.OleDb.dll
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\bin\Debug\net8.0-windows\runtimes\win\lib\net8.0\System.Data.OleDb.dll
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Access.MCP.Interop.csproj.AssemblyReference.cache
@@ -30,6 +29,7 @@ C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Access.
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Access.MCP.Interop.AssemblyInfoInputs.cache
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Access.MCP.Interop.AssemblyInfo.cs
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Access.MCP.Interop.csproj.CoreCompileInputs.cache
+C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Access.MCP.Interop.sourcelink.json
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Acces.FA8B2C29.Up2Date
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\MS.Access.MCP.Interop.dll
 C:\My-Access-AI-Server\MS.Access.MCP.Interop\obj\Debug\net8.0-windows\refint\MS.Access.MCP.Interop.dll

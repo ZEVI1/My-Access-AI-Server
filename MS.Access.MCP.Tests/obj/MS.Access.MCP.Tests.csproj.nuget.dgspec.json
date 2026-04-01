@@ -1,0 +1,234 @@
+{
+  "format": 1,
+  "restore": {
+    "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\MS.Access.MCP.Tests.csproj": {}
+  },
+  "projects": {
+    "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj",
+        "projectName": "MS.Access.MCP.Interop",
+        "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj",
+        "packagesPath": "C:\\Users\\ישראל רוכלין\\.nuget\\packages\\",
+        "outputPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\ישראל רוכלין\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0-windows"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0-windows7.0": {
+            "targetAlias": "net8.0-windows",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0-windows7.0": {
+          "targetAlias": "net8.0-windows",
+          "dependencies": {
+            "System.Data.OleDb": {
+              "target": "Package",
+              "version": "[8.0.0, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            },
+            "Microsoft.WindowsDesktop.App.WindowsForms": {
+              "privateAssets": "none"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.419/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj",
+        "projectName": "MS.Access.MCP.Official",
+        "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj",
+        "packagesPath": "C:\\Users\\ישראל רוכלין\\.nuget\\packages\\",
+        "outputPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\ישראל רוכלין\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0-windows"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0-windows7.0": {
+            "targetAlias": "net8.0-windows",
+            "projectReferences": {
+              "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj": {
+                "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0-windows7.0": {
+          "targetAlias": "net8.0-windows",
+          "dependencies": {
+            "Microsoft.Extensions.Configuration": {
+              "target": "Package",
+              "version": "[9.0.0, )"
+            },
+            "Microsoft.Extensions.Configuration.Json": {
+              "target": "Package",
+              "version": "[9.0.0, )"
+            },
+            "Microsoft.Extensions.Hosting": {
+              "target": "Package",
+              "version": "[9.0.0, )"
+            },
+            "ModelContextProtocol": {
+              "target": "Package",
+              "version": "[0.3.0-preview.3, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.419/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\MS.Access.MCP.Tests.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\MS.Access.MCP.Tests.csproj",
+        "projectName": "MS.Access.MCP.Tests",
+        "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\MS.Access.MCP.Tests.csproj",
+        "packagesPath": "C:\\Users\\ישראל רוכלין\\.nuget\\packages\\",
+        "outputPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\ישראל רוכלין\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0-windows"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0-windows7.0": {
+            "targetAlias": "net8.0-windows",
+            "projectReferences": {
+              "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj": {
+                "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj"
+              },
+              "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj": {
+                "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0-windows7.0": {
+          "targetAlias": "net8.0-windows",
+          "dependencies": {
+            "Microsoft.NET.Test.Sdk": {
+              "target": "Package",
+              "version": "[18.3.0, )"
+            },
+            "xunit": {
+              "target": "Package",
+              "version": "[2.4.2, )"
+            },
+            "xunit.runner.visualstudio": {
+              "target": "Package",
+              "version": "[2.4.5, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.419/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

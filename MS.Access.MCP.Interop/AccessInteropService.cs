@@ -378,6 +378,301 @@ namespace MS.Access.MCP.Interop
             return rows;
         }
 
+        public List<Dictionary<string, object?>> ReadTableData(string objectName, int limit = 50, int offset = 0)
+        {
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+            if (string.IsNullOrWhiteSpace(objectName)) throw new ArgumentException("Object name is required.", nameof(objectName));
+            if (!IsValidObjectName(objectName)) throw new ArgumentException("Invalid object name.", nameof(objectName));
+            if (limit <= 0) limit = 50;
+            if (offset < 0) offset = 0;
+
+            var sql = $"SELECT * FROM [{objectName}]";
+            using var command = new OleDbCommand(sql, _oleDbConnection)
+            {
+                CommandType = CommandType.Text
+            };
+
+            using var reader = command.ExecuteReader();
+            var rows = new List<Dictionary<string, object?>>();
+            var skipped = 0;
+            while (reader.Read())
+            {
+                if (skipped < offset)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var name = reader.GetName(i);
+                    var rawValue = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                    row[name] = NormalizeValue(rawValue);
+                }
+                rows.Add(row);
+
+                if (rows.Count >= limit)
+                    break;
+            }
+
+            return rows;
+        }
+
+        public object RunMacroOrVBA(string name, List<object?>? arguments = null)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("Macro or function name is required.", nameof(name));
+
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not available. Please launch Access first.");
+
+            try
+            {
+                var invocationArgs = new List<object?> { name };
+                if (arguments != null)
+                    invocationArgs.AddRange(arguments);
+
+                var result = accessApp.GetType().InvokeMember("Run", BindingFlags.InvokeMethod, null, accessApp, invocationArgs.ToArray());
+                return NormalizeValue(result);
+            }
+            catch (System.Runtime.InteropServices.COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to run macro or VBA function '{name}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to run macro or VBA function '{name}': {tie.InnerException.Message}", tie.InnerException);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to run macro or VBA function '{name}': {ex.Message}", ex);
+            }
+        }
+
+        public string GetFullSchemaMarkdown()
+        {
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
+            var tables = GetTables();
+            var relationships = GetRelationships();
+            var builder = new StringBuilder();
+
+            builder.AppendLine("# Database schema");
+            builder.AppendLine();
+            builder.AppendLine("## Tables");
+            builder.AppendLine();
+
+            foreach (var table in tables)
+            {
+                builder.AppendLine($"### {EscapeMarkdown(table.Name)} ({table.RecordCount} rows)");
+                builder.AppendLine();
+                builder.AppendLine("| Field | Type | Size | Required | AllowZeroLength |");
+                builder.AppendLine("|---|---|---|---|---|");
+                foreach (var field in table.Fields)
+                {
+                    builder.AppendLine($"| {EscapeMarkdown(field.Name)} | {EscapeMarkdown(field.Type)} | {field.Size} | {field.Required} | {field.AllowZeroLength} |");
+                }
+                builder.AppendLine();
+            }
+
+            builder.AppendLine("## Relationships");
+            builder.AppendLine();
+            builder.AppendLine("| Name | Table | Foreign Table | Attributes |");
+            builder.AppendLine("|---|---|---|---|");
+            foreach (var relationship in relationships)
+            {
+                builder.AppendLine($"| {EscapeMarkdown(relationship.Name)} | {EscapeMarkdown(relationship.Table)} | {EscapeMarkdown(relationship.ForeignTable)} | {EscapeMarkdown(relationship.Attributes)} |");
+            }
+
+            return builder.ToString().Trim();
+        }
+
+        public string GenerateEfCoreModels()
+        {
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
+            var tables = GetTables();
+            var builder = new StringBuilder();
+            builder.AppendLine("using System;");
+            builder.AppendLine();
+            builder.AppendLine("namespace AccessEfCoreModels");
+            builder.AppendLine("{");
+
+            foreach (var table in tables)
+            {
+                var className = SanitizeIdentifier(table.Name);
+                builder.AppendLine($"    public class {className}");
+                builder.AppendLine("    {");
+
+                if (table.Fields.Count == 0)
+                {
+                    builder.AppendLine("        // No fields available for this table.");
+                }
+                else
+                {
+                    foreach (var field in table.Fields)
+                    {
+                        var propertyName = SanitizeIdentifier(field.Name);
+                        var propertyType = MapAccessTypeToCSharpType(field.Type);
+                        builder.AppendLine($"        public {propertyType} {propertyName} {{ get; set; }}");
+                    }
+                }
+
+                builder.AppendLine("    }");
+                builder.AppendLine();
+            }
+
+            builder.AppendLine("}");
+            return builder.ToString().TrimEnd();
+        }
+
+        private static object? NormalizeValue(object? value)
+        {
+            if (value == null || value == DBNull.Value)
+                return null;
+
+            return value switch
+            {
+                byte[] bytes => Convert.ToBase64String(bytes),
+                DateTime dateTime => dateTime.ToString("o"),
+                Guid guid => guid.ToString(),
+                char character => character.ToString(),
+                string _ => value,
+                bool _ => value,
+                byte _ => value,
+                sbyte _ => value,
+                short _ => value,
+                ushort _ => value,
+                int _ => value,
+                uint _ => value,
+                long _ => value,
+                ulong _ => value,
+                float _ => value,
+                double _ => value,
+                decimal _ => value,
+                _ => value.ToString()
+            };
+        }
+
+        private static bool IsValidObjectName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+
+            if (name.IndexOfAny(new[] { '[', ']', ';', '\'', '"' }) >= 0)
+                return false;
+
+            foreach (var character in name)
+            {
+                if (!(char.IsLetterOrDigit(character) || character == '_' || character == ' ' || character == '$' || character == '#' || character == '.'))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static string EscapeMarkdown(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            return value.Replace("|", "\\|").Replace("\r", " ").Replace("\n", " ");
+        }
+
+        private static string SanitizeIdentifier(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return "_";
+
+            var builder = new StringBuilder();
+            foreach (var ch in input)
+            {
+                if (char.IsLetterOrDigit(ch) || ch == '_')
+                    builder.Append(ch);
+                else
+                    builder.Append('_');
+            }
+
+            var result = builder.ToString();
+            if (result.Length == 0)
+                return "_";
+
+            if (!char.IsLetter(result[0]) && result[0] != '_')
+                result = "_" + result;
+
+            return result;
+        }
+
+        private static string SanitizeFileName(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return Guid.NewGuid().ToString("N");
+
+            var builder = new StringBuilder();
+            foreach (var ch in input)
+            {
+                if (Path.GetInvalidFileNameChars().Contains(ch) || char.IsWhiteSpace(ch))
+                    builder.Append('_');
+                else
+                    builder.Append(ch);
+            }
+
+            var name = builder.ToString();
+            return string.IsNullOrEmpty(name) ? Guid.NewGuid().ToString("N") : name;
+        }
+
+        private static string MapAccessTypeToCSharpType(string accessType)
+        {
+            if (string.IsNullOrWhiteSpace(accessType))
+                return "string";
+
+            if (int.TryParse(accessType, out var typeCode))
+            {
+                return typeCode switch
+                {
+                    2 => "int",
+                    3 => "int",
+                    4 => "float",
+                    5 => "double",
+                    6 => "decimal",
+                    7 => "DateTime",
+                    10 => "DateTime",
+                    11 => "bool",
+                    17 => "byte",
+                    72 => "Guid",
+                    128 => "byte[]",
+                    130 => "string",
+                    201 => "string",
+                    203 => "string",
+                    204 => "byte[]",
+                    205 => "byte[]",
+                    _ => "string",
+                };
+            }
+
+            var normalized = accessType.Trim().ToLowerInvariant();
+            if (normalized.Contains("char") || normalized.Contains("text") || normalized.Contains("memo") || normalized.Contains("string") || normalized.Contains("varchar"))
+                return "string";
+            if (normalized.Contains("date") || normalized.Contains("time"))
+                return "DateTime";
+            if (normalized.Contains("bool"))
+                return "bool";
+            if (normalized.Contains("currency") || normalized.Contains("decimal") || normalized.Contains("numeric"))
+                return "decimal";
+            if (normalized.Contains("double"))
+                return "double";
+            if (normalized.Contains("single") || normalized.Contains("float"))
+                return "float";
+            if (normalized.Contains("byte") || normalized.Contains("binary") || normalized.Contains("oleobject"))
+                return "byte[]";
+            if (normalized.Contains("guid"))
+                return "Guid";
+
+            return "string";
+        }
+
         private static OleDbParameter CreateOleDbParameter(object? value)
         {
             var parameter = new OleDbParameter
@@ -1326,6 +1621,45 @@ namespace MS.Access.MCP.Interop
             };
 
             return JsonSerializer.Serialize(reportData, new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        public string ExportReportToPdf(string reportName)
+        {
+            if (string.IsNullOrWhiteSpace(reportName))
+                throw new ArgumentException("Report name is required.", nameof(reportName));
+
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
+            var reports = GetReports();
+            if (!reports.Exists(r => string.Equals(r.Name, reportName, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException($"Report '{reportName}' does not exist.", nameof(reportName));
+
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not available. Please launch Access first.");
+
+            var outputFileName = $"{SanitizeFileName(reportName)}_{Guid.NewGuid():N}.pdf";
+            var outputFilePath = Path.Combine(Path.GetTempPath(), outputFileName);
+
+            dynamic? doCmd = null;
+            try
+            {
+                doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
+                doCmd.GetType().InvokeMember("OutputTo", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, reportName, "PDF", outputFilePath, false });
+                return Path.GetFullPath(outputFilePath);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to export report '{reportName}' to PDF: {tie.InnerException.Message}", tie.InnerException);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to export report '{reportName}' to PDF: {ex.Message}", ex);
+            }
+            finally
+            {
+                ReleaseComObjectSafe(doCmd);
+            }
         }
 
         public void ImportReportFromText(string reportData)

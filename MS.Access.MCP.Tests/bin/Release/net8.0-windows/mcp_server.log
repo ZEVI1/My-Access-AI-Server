@@ -1,0 +1,87 @@
+﻿{"level":"Information","event":"LogMessage","message":"JSON parse error: System.Text.Json.JsonReaderException: \u0027i\u0027 is an invalid start of a property name. Expected a \u0027\u0022\u0027. LineNumber: 0 | BytePositionInLine: 2.\r\n   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader\u0026 json, ExceptionResource resource, Byte nextByte, ReadOnlySpan\u00601 bytes)\r\n   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()\r\n   at System.Text.Json.Utf8JsonReader.Read()\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlySpan\u00601 utf8JsonSpan, JsonReaderOptions readerOptions, MetadataDb\u0026 database, StackRowStack\u0026 stack)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 utf8Json, JsonReaderOptions readerOptions, Byte[] extraRentedArrayPoolBytes, PooledByteBufferWriter extraPooledByteBufferWriter)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 json, JsonDocumentOptions options)\r\n   at System.Text.Json.JsonDocument.Parse(String json, JsonDocumentOptions options)\r\n   at Program.ProcessRpcMessage(AccessInteropService accessService, String message) in C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\Program.cs:line 292"}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"JSON parse error: System.Text.Json.JsonReaderException: \u0027i\u0027 is an invalid start of a property name. Expected a \u0027\u0022\u0027. LineNumber: 0 | BytePositionInLine: 2.\r\n   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader\u0026 json, ExceptionResource resource, Byte nextByte, ReadOnlySpan\u00601 bytes)\r\n   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()\r\n   at System.Text.Json.Utf8JsonReader.Read()\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlySpan\u00601 utf8JsonSpan, JsonReaderOptions readerOptions, MetadataDb\u0026 database, StackRowStack\u0026 stack)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 utf8Json, JsonReaderOptions readerOptions, Byte[] extraRentedArrayPoolBytes, PooledByteBufferWriter extraPooledByteBufferWriter)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 json, JsonDocumentOptions options)\r\n   at System.Text.Json.JsonDocument.Parse(String json, JsonDocumentOptions options)\r\n   at Program.ProcessRpcMessage(AccessInteropService accessService, String message) in C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\Program.cs:line 292"}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"JSON parse error: System.Text.Json.JsonReaderException: \u0027i\u0027 is an invalid start of a property name. Expected a \u0027\u0022\u0027. LineNumber: 0 | BytePositionInLine: 2.\r\n   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader\u0026 json, ExceptionResource resource, Byte nextByte, ReadOnlySpan\u00601 bytes)\r\n   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()\r\n   at System.Text.Json.Utf8JsonReader.Read()\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlySpan\u00601 utf8JsonSpan, JsonReaderOptions readerOptions, MetadataDb\u0026 database, StackRowStack\u0026 stack)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 utf8Json, JsonReaderOptions readerOptions, Byte[] extraRentedArrayPoolBytes, PooledByteBufferWriter extraPooledByteBufferWriter)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 json, JsonDocumentOptions options)\r\n   at System.Text.Json.JsonDocument.Parse(String json, JsonDocumentOptions options)\r\n   at Program.ProcessRpcMessage(AccessInteropService accessService, String message) in C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\Program.cs:line 292"}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"JSON parse error: System.Text.Json.JsonReaderException: \u0027i\u0027 is an invalid start of a property name. Expected a \u0027\u0022\u0027. LineNumber: 0 | BytePositionInLine: 2.\r\n   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader\u0026 json, ExceptionResource resource, Byte nextByte, ReadOnlySpan\u00601 bytes)\r\n   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()\r\n   at System.Text.Json.Utf8JsonReader.Read()\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlySpan\u00601 utf8JsonSpan, JsonReaderOptions readerOptions, MetadataDb\u0026 database, StackRowStack\u0026 stack)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 utf8Json, JsonReaderOptions readerOptions, Byte[] extraRentedArrayPoolBytes, PooledByteBufferWriter extraPooledByteBufferWriter)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 json, JsonDocumentOptions options)\r\n   at System.Text.Json.JsonDocument.Parse(String json, JsonDocumentOptions options)\r\n   at Program.ProcessRpcMessage(AccessInteropService accessService, String message) in C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\Program.cs:line 292"}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"JSON parse error: System.Text.Json.JsonReaderException: \u0027i\u0027 is an invalid start of a property name. Expected a \u0027\u0022\u0027. LineNumber: 0 | BytePositionInLine: 2.\r\n   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader\u0026 json, ExceptionResource resource, Byte nextByte, ReadOnlySpan\u00601 bytes)\r\n   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()\r\n   at System.Text.Json.Utf8JsonReader.Read()\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlySpan\u00601 utf8JsonSpan, JsonReaderOptions readerOptions, MetadataDb\u0026 database, StackRowStack\u0026 stack)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 utf8Json, JsonReaderOptions readerOptions, Byte[] extraRentedArrayPoolBytes, PooledByteBufferWriter extraPooledByteBufferWriter)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 json, JsonDocumentOptions options)\r\n   at System.Text.Json.JsonDocument.Parse(String json, JsonDocumentOptions options)\r\n   at Program.ProcessRpcMessage(AccessInteropService accessService, String message) in C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\Program.cs:line 292"}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"JSON parse error: System.Text.Json.JsonReaderException: \u0027i\u0027 is an invalid start of a property name. Expected a \u0027\u0022\u0027. LineNumber: 0 | BytePositionInLine: 2.\r\n   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader\u0026 json, ExceptionResource resource, Byte nextByte, ReadOnlySpan\u00601 bytes)\r\n   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()\r\n   at System.Text.Json.Utf8JsonReader.Read()\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlySpan\u00601 utf8JsonSpan, JsonReaderOptions readerOptions, MetadataDb\u0026 database, StackRowStack\u0026 stack)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 utf8Json, JsonReaderOptions readerOptions, Byte[] extraRentedArrayPoolBytes, PooledByteBufferWriter extraPooledByteBufferWriter)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 json, JsonDocumentOptions options)\r\n   at System.Text.Json.JsonDocument.Parse(String json, JsonDocumentOptions options)\r\n   at Program.ProcessRpcMessage(AccessInteropService accessService, String message) in C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\Program.cs:line 292"}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"JSON parse error: System.Text.Json.JsonReaderException: \u0027i\u0027 is an invalid start of a property name. Expected a \u0027\u0022\u0027. LineNumber: 0 | BytePositionInLine: 2.\r\n   at System.Text.Json.ThrowHelper.ThrowJsonReaderException(Utf8JsonReader\u0026 json, ExceptionResource resource, Byte nextByte, ReadOnlySpan\u00601 bytes)\r\n   at System.Text.Json.Utf8JsonReader.ReadSingleSegment()\r\n   at System.Text.Json.Utf8JsonReader.Read()\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlySpan\u00601 utf8JsonSpan, JsonReaderOptions readerOptions, MetadataDb\u0026 database, StackRowStack\u0026 stack)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 utf8Json, JsonReaderOptions readerOptions, Byte[] extraRentedArrayPoolBytes, PooledByteBufferWriter extraPooledByteBufferWriter)\r\n   at System.Text.Json.JsonDocument.Parse(ReadOnlyMemory\u00601 json, JsonDocumentOptions options)\r\n   at System.Text.Json.JsonDocument.Parse(String json, JsonDocumentOptions options)\r\n   at Program.ProcessRpcMessage(AccessInteropService accessService, String message) in C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\Program.cs:line 292"}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: starting cleanup."}
+{"level":"Information","event":"LogMessage","message":"AccessInteropService.Disconnect: cleanup complete."}

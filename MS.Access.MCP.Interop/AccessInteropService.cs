@@ -1108,15 +1108,16 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
-            if (_accessApplication == null)
-                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
 
             if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
                 throw new ArgumentException("Project name and module name are required.");
 
             try
             {
-                var currentProject = _accessApplication.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, _accessApplication, null);
+                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
                 var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
                 if (vbeProject == null)
                     throw new InvalidOperationException("Access VBProject not available.");
@@ -1127,8 +1128,10 @@ namespace MS.Access.MCP.Interop
                     throw new InvalidOperationException($"Module '{moduleName}' not found.");
 
                 var codeModule = component.GetType().InvokeMember("CodeModule", BindingFlags.GetProperty, null, component, null);
-                var lineCount = (int)codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null);
-                return (string)codeModule.GetType().InvokeMember("Lines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, lineCount });
+                var lineCount = Convert.ToInt32(codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null));
+                return lineCount > 0
+                    ? (string)codeModule.GetType().InvokeMember("Lines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, lineCount })
+                    : string.Empty;
             }
             catch (Exception ex)
             {
@@ -1136,20 +1139,334 @@ namespace MS.Access.MCP.Interop
             }
         }
 
+        public List<VBAModuleDetail> ExtractRawVBAModules()
+        {
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
+
+            var modules = new List<VBAModuleDetail>();
+            try
+            {
+                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
+                var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
+                if (vbeProject == null)
+                    throw new InvalidOperationException("Access VBProject not available.");
+
+                var vbComponents = vbeProject.GetType().InvokeMember("VBComponents", BindingFlags.GetProperty, null, vbeProject, null);
+                var count = Convert.ToInt32(vbComponents.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, vbComponents, null));
+
+                for (int i = 1; i <= count; i++)
+                {
+                    try
+                    {
+                        var component = vbComponents.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, vbComponents, new object[] { i });
+                        var name = Convert.ToString(component.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, component, null)) ?? string.Empty;
+                        var typeValue = component.GetType().InvokeMember("Type", BindingFlags.GetProperty, null, component, null);
+                        var moduleType = typeValue?.ToString() ?? "Unknown";
+                        var codeModule = component.GetType().InvokeMember("CodeModule", BindingFlags.GetProperty, null, component, null);
+                        var lineCount = Convert.ToInt32(codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null));
+                        var code = lineCount > 0
+                            ? (string)codeModule.GetType().InvokeMember("Lines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, lineCount })
+                            : string.Empty;
+
+                        modules.Add(new VBAModuleDetail
+                        {
+                            ProjectName = "CurrentProject",
+                            ModuleName = name,
+                            ModuleType = moduleType,
+                            Code = code
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        FileLogger.Log($"ExtractRawVBAModules: failed reading component {i}: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to extract VBA modules: {ex.Message}", ex);
+            }
+
+            return modules;
+        }
+
+        public List<FormMetadata> ExtractFormMetadata()
+        {
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
+
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
+
+            var formMetadata = new List<FormMetadata>();
+            try
+            {
+                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
+                var allForms = currentProject.GetType().InvokeMember("AllForms", BindingFlags.GetProperty, null, currentProject, null);
+                var count = Convert.ToInt32(allForms.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, allForms, null));
+
+                for (int i = 1; i <= count; i++)
+                {
+                    try
+                    {
+                        var formDef = allForms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, allForms, new object[] { i });
+                        var formName = Convert.ToString(formDef.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, formDef, null)) ?? string.Empty;
+                        if (string.IsNullOrEmpty(formName))
+                            continue;
+
+                        var metadata = ExtractObjectUiMetadata(accessApp, formName, "Form");
+                        formMetadata.Add(metadata);
+                    }
+                    catch (Exception ex)
+                    {
+                        FileLogger.Log($"ExtractFormMetadata: failed reading form {i}: {ex.Message}");
+                        continue;
+                    }
+                }
+
+                try
+                {
+                    var allReports = currentProject.GetType().InvokeMember("AllReports", BindingFlags.GetProperty, null, currentProject, null);
+                    var reportCount = Convert.ToInt32(allReports.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, allReports, null));
+
+                    for (int i = 1; i <= reportCount; i++)
+                    {
+                        try
+                        {
+                            var reportDef = allReports.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, allReports, new object[] { i });
+                            var reportName = Convert.ToString(reportDef.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, reportDef, null)) ?? string.Empty;
+                            if (string.IsNullOrEmpty(reportName))
+                                continue;
+
+                            var metadata = ExtractObjectUiMetadata(accessApp, reportName, "Report");
+                            formMetadata.Add(metadata);
+                        }
+                        catch (Exception ex)
+                        {
+                            FileLogger.Log($"ExtractFormMetadata: failed reading report {i}: {ex.Message}");
+                            continue;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Reports are optional for metadata extraction
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to extract form metadata: {ex.Message}", ex);
+            }
+
+            return formMetadata;
+        }
+
+        public List<ComplexTypeInfo> ExtractComplexTypes()
+        {
+            var types = new List<ComplexTypeInfo>();
+            try
+            {
+                var schema = _oleDbConnection!.GetSchema("Columns");
+                foreach (System.Data.DataRow row in schema.Rows)
+                {
+                    var typeName = Convert.ToString(row["TYPE_NAME"]) ?? string.Empty;
+                    var dataType = Convert.ToString(row["DATA_TYPE"]) ?? string.Empty;
+                    var tableName = Convert.ToString(row["TABLE_NAME"]) ?? string.Empty;
+                    var columnName = Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty;
+
+                    if (typeName.IndexOf("attachment", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        typeName.IndexOf("oleobject", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        columnName.IndexOf("attachment", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        types.Add(new ComplexTypeInfo
+                        {
+                            TableName = tableName,
+                            ColumnName = columnName,
+                            DataType = string.IsNullOrEmpty(typeName) ? dataType : typeName,
+                            Notes = "Detected attachment or binary complex type"
+                        });
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback when schema extraction fails
+            }
+
+            if (!types.Any())
+            {
+                types.Add(new ComplexTypeInfo
+                {
+                    TableName = "global",
+                    ColumnName = "*",
+                    DataType = "ATTACHMENT/LOOKUP",
+                    Notes = "No explicit complex field types were detected, but Access may contain hidden lookup/attachment fields."
+                });
+            }
+
+            return types;
+        }
+
+        public List<HiddenLookupInfo> ExtractHiddenLookupFields()
+        {
+            var lookups = new List<HiddenLookupInfo>();
+            try
+            {
+                var schema = _oleDbConnection!.GetSchema("Columns");
+                foreach (System.Data.DataRow row in schema.Rows)
+                {
+                    var typeName = Convert.ToString(row["TYPE_NAME"]) ?? string.Empty;
+                    var tableName = Convert.ToString(row["TABLE_NAME"]) ?? string.Empty;
+                    var columnName = Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty;
+
+                    if (typeName.IndexOf("lookup", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        columnName.IndexOf("lookup", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        lookups.Add(new HiddenLookupInfo
+                        {
+                            TableName = tableName,
+                            ColumnName = columnName,
+                            Notes = "Detected lookup field metadata"
+                        });
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback to empty list
+            }
+
+            if (!lookups.Any())
+            {
+                lookups.Add(new HiddenLookupInfo
+                {
+                    TableName = "global",
+                    ColumnName = "*",
+                    Notes = "No explicit lookup field columns were detected."
+                });
+            }
+
+            return lookups;
+        }
+
+        private FormMetadata ExtractObjectUiMetadata(object accessApp, string objectName, string objectType)
+        {
+            var metadata = new FormMetadata
+            {
+                Name = objectName,
+                ObjectType = objectType,
+                Controls = new List<ControlMetadata>()
+            };
+
+            try
+            {
+                var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
+                if (objectType == "Form")
+                {
+                    doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { objectName, 0, null, null, 0, 1 });
+                }
+                else
+                {
+                    doCmd.GetType().InvokeMember("OpenReport", BindingFlags.InvokeMethod, null, doCmd, new object[] { objectName, 0, null, null, 1 });
+                }
+
+                var containerName = objectType == "Form" ? "Forms" : "Reports";
+                var collection = accessApp.GetType().InvokeMember(containerName, BindingFlags.GetProperty, null, accessApp, null);
+                var obj = collection.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, collection, new object[] { objectName });
+                var controls = obj.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, obj, null);
+                var controlCount = Convert.ToInt32(controls.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
+
+                for (int j = 1; j <= controlCount; j++)
+                {
+                    try
+                    {
+                        var control = controls.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, controls, new object[] { j });
+                        var name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? string.Empty;
+                        var typeValue = control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)?.ToString() ?? string.Empty;
+                        var left = SafeGetInt32(control, "Left", 0);
+                        var top = SafeGetInt32(control, "Top", 0);
+                        var width = SafeGetInt32(control, "Width", 0);
+                        var height = SafeGetInt32(control, "Height", 0);
+                        var visible = SafeGetBool(control, "Visible", true);
+                        var enabled = SafeGetBool(control, "Enabled", true);
+                        var controlSource = SafeGetString(control, "ControlSource", string.Empty);
+
+                        var events = new List<ControlEventInfo>();
+                        foreach (var eventName in new[] { "OnClick", "OnDblClick", "OnChange", "OnCurrent", "OnLoad", "OnOpen" })
+                        {
+                            var eventValue = SafeGetString(control, eventName, string.Empty);
+                            if (!string.IsNullOrEmpty(eventValue))
+                            {
+                                events.Add(new ControlEventInfo { EventName = eventName, PropertyValue = eventValue });
+                            }
+                        }
+
+                        metadata.Controls.Add(new ControlMetadata
+                        {
+                            Name = name,
+                            Type = typeValue,
+                            Left = left,
+                            Top = top,
+                            Width = width,
+                            Height = height,
+                            Visible = visible,
+                            Enabled = enabled,
+                            ControlSource = controlSource,
+                            BoundField = string.IsNullOrEmpty(controlSource) ? null : controlSource,
+                            Events = events
+                        });
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"ExtractObjectUiMetadata failed for {objectType} '{objectName}': {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
+                    if (objectType == "Form")
+                    {
+                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, objectName, 1 });
+                    }
+                    else
+                    {
+                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
+                    }
+                }
+                catch { }
+            }
+
+            return metadata;
+        }
+
         public void SetVBACode(string projectName, string moduleName, string code)
         {
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
-            if (_accessApplication == null)
-                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
 
             if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
                 throw new ArgumentException("Project name and module name are required.");
 
             try
             {
-                var currentProject = _accessApplication.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, _accessApplication, null);
+                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
                 var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
                 if (vbeProject == null)
                     throw new InvalidOperationException("Access VBProject not available.");
@@ -1370,8 +1687,9 @@ namespace MS.Access.MCP.Interop
             if (string.IsNullOrEmpty(formName))
                 throw new ArgumentException("Form name is required", nameof(formName));
 
-            if (_accessApplication == null)
-                throw new InvalidOperationException("Access application is not initialized.");
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not initialized. Please launch Access first.");
 
             var controlsInfo = new List<ControlInfo>();
 
@@ -1419,8 +1737,9 @@ namespace MS.Access.MCP.Interop
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
-            if (_accessApplication == null)
-                throw new InvalidOperationException("Access application is not initialized.");
+            var accessApp = EnsureAccessApplication();
+            if (accessApp == null)
+                throw new InvalidOperationException("Access application is not initialized. Please launch Access first.");
 
             if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
                 throw new ArgumentException("Form name and control name are required.");
@@ -1892,6 +2211,57 @@ namespace MS.Access.MCP.Interop
         public int FontSize { get; set; }
         public bool FontBold { get; set; }
         public bool FontItalic { get; set; }
+    }
+
+    public class ControlEventInfo
+    {
+        public string EventName { get; set; } = "";
+        public string PropertyValue { get; set; } = "";
+    }
+
+    public class ControlMetadata
+    {
+        public string Name { get; set; } = "";
+        public string Type { get; set; } = "";
+        public int Left { get; set; }
+        public int Top { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public bool Visible { get; set; }
+        public bool Enabled { get; set; }
+        public string ControlSource { get; set; } = "";
+        public string? BoundField { get; set; }
+        public List<ControlEventInfo> Events { get; set; } = new();
+    }
+
+    public class FormMetadata
+    {
+        public string Name { get; set; } = "";
+        public string ObjectType { get; set; } = "Form";
+        public List<ControlMetadata> Controls { get; set; } = new();
+    }
+
+    public class VBAModuleDetail
+    {
+        public string ProjectName { get; set; } = "";
+        public string ModuleName { get; set; } = "";
+        public string ModuleType { get; set; } = "";
+        public string Code { get; set; } = "";
+    }
+
+    public class ComplexTypeInfo
+    {
+        public string TableName { get; set; } = "";
+        public string ColumnName { get; set; } = "";
+        public string DataType { get; set; } = "";
+        public string Notes { get; set; } = "";
+    }
+
+    public class HiddenLookupInfo
+    {
+        public string TableName { get; set; } = "";
+        public string ColumnName { get; set; } = "";
+        public string Notes { get; set; } = "";
     }
 
     public class FormExportData

@@ -519,6 +519,12 @@ class Program
                 new { name = "get_table_data", description = "Read table or query rows with pagination for safe LLM consumption", inputSchema = new { type = "object", properties = new { object_name = new { type = "string" }, limit = new { type = "integer", minimum = 1 }, offset = new { type = "integer", minimum = 0 } }, required = new string[] { "object_name" } } },
                 new { name = "run_macro_or_vba", description = "Run an Access macro or VBA function through COM interop", inputSchema = new { type = "object", properties = new { name = new { type = "string" }, arguments = new { type = "array", items = new { type = "object" } } }, required = new string[] { "name" } } },
                 new { name = "get_full_schema_markdown", description = "Get full database schema as a single markdown string for RAG", inputSchema = new { type = "object", properties = new { } } },
+                new { name = "schema", description = "Extract full Access schema metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "hidden_lookup_fields", description = "Extract hidden lookup field metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "complex_types", description = "Extract complex Access field types such as attachments and lookups", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "vba_modules", description = "Extract raw VBA modules and class code", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "form_metadata", description = "Extract form and report UI metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "ui_metadata", description = "Alias for form_metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
                 new { name = "refresh_schema_cache", description = "Refresh cached schema metadata", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "health_check", description = "Verify server health and status", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "server_info", description = "Get server information", inputSchema = new { type = "object", properties = new { } } },
@@ -571,6 +577,12 @@ class Program
             "get_table_data" => HandleGetTableData(accessService, arguments.GetProperty("arguments")),
             "run_macro_or_vba" => HandleRunMacroOrVBA(accessService, arguments.GetProperty("arguments")),
             "get_full_schema_markdown" => HandleGetFullSchemaMarkdown(accessService, arguments.GetProperty("arguments")),
+            "schema" => HandleSchema(accessService, arguments.GetProperty("arguments")),
+            "hidden_lookup_fields" => HandleHiddenLookupFields(accessService, arguments.GetProperty("arguments")),
+            "complex_types" => HandleComplexTypes(accessService, arguments.GetProperty("arguments")),
+            "vba_modules" => HandleVbaModules(accessService, arguments.GetProperty("arguments")),
+            "form_metadata" => HandleFormMetadata(accessService, arguments.GetProperty("arguments")),
+            "ui_metadata" => HandleUiMetadata(accessService, arguments.GetProperty("arguments")),
             "refresh_schema_cache" => HandleRefreshSchemaCache(accessService, arguments.GetProperty("arguments")),
             "health_check" => HandleHealthCheck(accessService, arguments.GetProperty("arguments")),
             "server_info" => HandleServerInfo(accessService, arguments.GetProperty("arguments")),
@@ -858,6 +870,131 @@ class Program
         catch (Exception ex)
         {
             return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleSchema(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var tables = accessService.GetTables();
+            var queries = accessService.GetQueries();
+            var relationships = accessService.GetRelationships();
+
+            return new
+            {
+                success = true,
+                tables = tables.ToArray(),
+                queries = queries.ToArray(),
+                relationships = relationships.ToArray()
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleHiddenLookupFields(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var result = accessService.ExtractHiddenLookupFields();
+            return new { success = true, hidden_lookup_fields = result.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleComplexTypes(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var result = accessService.ExtractComplexTypes();
+            return new { success = true, complex_types = result.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleVbaModules(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var modules = accessService.ExtractRawVBAModules();
+            return new { success = true, modules = modules.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleFormMetadata(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var forms = accessService.ExtractFormMetadata();
+            return new { success = true, forms = forms.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleUiMetadata(AccessInteropService accessService, JsonElement arguments)
+    {
+        return HandleFormMetadata(accessService, arguments);
+    }
+
+    static bool TryEnsureConnected(AccessInteropService accessService, JsonElement arguments, out string? error)
+    {
+        error = null;
+        if (accessService.IsConnected)
+            return true;
+
+        if (!arguments.TryGetProperty("access_file", out var fileElement) || fileElement.ValueKind != JsonValueKind.String)
+        {
+            error = "access_file is required";
+            return false;
+        }
+
+        var accessFile = fileElement.GetString();
+        if (string.IsNullOrEmpty(accessFile))
+        {
+            error = "access_file cannot be empty";
+            return false;
+        }
+
+        try
+        {
+            accessService.Connect(accessFile);
+            return accessService.IsConnected;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
         }
     }
 

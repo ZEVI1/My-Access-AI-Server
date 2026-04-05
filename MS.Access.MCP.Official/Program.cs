@@ -285,7 +285,7 @@ class Program
         catch (OperationCanceledException) { }
     }
 
-    static JsonRpcResponse? ProcessRpcMessage(AccessInteropService accessService, string message)
+    internal static JsonRpcResponse? ProcessRpcMessage(AccessInteropService accessService, string message)
     {
         try
         {
@@ -406,7 +406,7 @@ class Program
         };
     }
 
-    static async Task<string?> ReadRpcMessageAsync(Stream stream, CancellationToken cancellationToken)
+    internal static async Task<string?> ReadRpcMessageAsync(Stream stream, CancellationToken cancellationToken)
     {
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var firstLine = await ReadLineAsync(stream, cancellationToken);
@@ -516,6 +516,15 @@ class Program
                 new { name = "get_system_tables", description = "Get list of system tables", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_object_metadata", description = "Get metadata for database objects", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "execute_sql", description = "Execute raw SQL against the connected database", inputSchema = new { type = "object", properties = new { sql = new { type = "string" }, mode = new { type = "string", @enum = new string[] { "select", "nonquery", "scalar" } }, parameters = new { type = "array", items = new { type = "object" } } }, required = new string[] { "sql" } } },
+                new { name = "get_table_data", description = "Read table or query rows with pagination for safe LLM consumption", inputSchema = new { type = "object", properties = new { object_name = new { type = "string" }, limit = new { type = "integer", minimum = 1 }, offset = new { type = "integer", minimum = 0 } }, required = new string[] { "object_name" } } },
+                new { name = "run_macro_or_vba", description = "Run an Access macro or VBA function through COM interop", inputSchema = new { type = "object", properties = new { name = new { type = "string" }, arguments = new { type = "array", items = new { type = "object" } } }, required = new string[] { "name" } } },
+                new { name = "get_full_schema_markdown", description = "Get full database schema as a single markdown string for RAG", inputSchema = new { type = "object", properties = new { } } },
+                new { name = "schema", description = "Extract full Access schema metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "hidden_lookup_fields", description = "Extract hidden lookup field metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "complex_types", description = "Extract complex Access field types such as attachments and lookups", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "vba_modules", description = "Extract raw VBA modules and class code", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "form_metadata", description = "Extract form and report UI metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
+                new { name = "ui_metadata", description = "Alias for form_metadata", inputSchema = new { type = "object", properties = new { access_file = new { type = "string" } }, required = new string[] { "access_file" } } },
                 new { name = "refresh_schema_cache", description = "Refresh cached schema metadata", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "health_check", description = "Verify server health and status", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "server_info", description = "Get server information", inputSchema = new { type = "object", properties = new { } } },
@@ -527,6 +536,8 @@ class Program
                 new { name = "import_form_from_text", description = "Import a form from text format", inputSchema = new { type = "object", properties = new { form_data = new { type = "string" } }, required = new string[] { "form_data" } } },
                 new { name = "delete_form", description = "Delete a form from the database", inputSchema = new { type = "object", properties = new { form_name = new { type = "string" } }, required = new string[] { "form_name" } } },
                 new { name = "export_report_to_text", description = "Export a report to text format", inputSchema = new { type = "object", properties = new { report_name = new { type = "string" } }, required = new string[] { "report_name" } } },
+                new { name = "export_report_to_pdf", description = "Export a report to a PDF file", inputSchema = new { type = "object", properties = new { report_name = new { type = "string" } }, required = new string[] { "report_name" } } },
+                new { name = "generate_ef_core_models", description = "Generate C# EF Core entity classes from Access schema", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "import_report_from_text", description = "Import a report from text format", inputSchema = new { type = "object", properties = new { report_data = new { type = "string" } }, required = new string[] { "report_data" } } },
                 new { name = "delete_report", description = "Delete a report from the database", inputSchema = new { type = "object", properties = new { report_name = new { type = "string" } }, required = new string[] { "report_name" } } }
             }
@@ -563,6 +574,15 @@ class Program
             "get_system_tables" => HandleGetSystemTables(accessService, arguments.GetProperty("arguments")),
             "get_object_metadata" => HandleGetObjectMetadata(accessService, arguments.GetProperty("arguments")),
             "execute_sql" => HandleExecuteSql(accessService, arguments.GetProperty("arguments")),
+            "get_table_data" => HandleGetTableData(accessService, arguments.GetProperty("arguments")),
+            "run_macro_or_vba" => HandleRunMacroOrVBA(accessService, arguments.GetProperty("arguments")),
+            "get_full_schema_markdown" => HandleGetFullSchemaMarkdown(accessService, arguments.GetProperty("arguments")),
+            "schema" => HandleSchema(accessService, arguments.GetProperty("arguments")),
+            "hidden_lookup_fields" => HandleHiddenLookupFields(accessService, arguments.GetProperty("arguments")),
+            "complex_types" => HandleComplexTypes(accessService, arguments.GetProperty("arguments")),
+            "vba_modules" => HandleVbaModules(accessService, arguments.GetProperty("arguments")),
+            "form_metadata" => HandleFormMetadata(accessService, arguments.GetProperty("arguments")),
+            "ui_metadata" => HandleUiMetadata(accessService, arguments.GetProperty("arguments")),
             "refresh_schema_cache" => HandleRefreshSchemaCache(accessService, arguments.GetProperty("arguments")),
             "health_check" => HandleHealthCheck(accessService, arguments.GetProperty("arguments")),
             "server_info" => HandleServerInfo(accessService, arguments.GetProperty("arguments")),
@@ -574,6 +594,8 @@ class Program
             "import_form_from_text" => HandleImportFormFromText(accessService, arguments.GetProperty("arguments")),
             "delete_form" => HandleDeleteForm(accessService, arguments.GetProperty("arguments")),
             "export_report_to_text" => HandleExportReportToText(accessService, arguments.GetProperty("arguments")),
+            "export_report_to_pdf" => HandleExportReportToPdf(accessService, arguments.GetProperty("arguments")),
+            "generate_ef_core_models" => HandleGenerateEfCoreModels(accessService, arguments.GetProperty("arguments")),
             "import_report_from_text" => HandleImportReportFromText(accessService, arguments.GetProperty("arguments")),
             "delete_report" => HandleDeleteReport(accessService, arguments.GetProperty("arguments")),
             _ => throw new InvalidOperationException($"Unknown tool: {toolName}")
@@ -851,6 +873,131 @@ class Program
         }
     }
 
+    static object HandleSchema(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var tables = accessService.GetTables();
+            var queries = accessService.GetQueries();
+            var relationships = accessService.GetRelationships();
+
+            return new
+            {
+                success = true,
+                tables = tables.ToArray(),
+                queries = queries.ToArray(),
+                relationships = relationships.ToArray()
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleHiddenLookupFields(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var result = accessService.ExtractHiddenLookupFields();
+            return new { success = true, hidden_lookup_fields = result.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleComplexTypes(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var result = accessService.ExtractComplexTypes();
+            return new { success = true, complex_types = result.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleVbaModules(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var modules = accessService.ExtractRawVBAModules();
+            return new { success = true, modules = modules.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleFormMetadata(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!TryEnsureConnected(accessService, arguments, out var error))
+                return new { success = false, error };
+
+            var forms = accessService.ExtractFormMetadata();
+            return new { success = true, forms = forms.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleUiMetadata(AccessInteropService accessService, JsonElement arguments)
+    {
+        return HandleFormMetadata(accessService, arguments);
+    }
+
+    static bool TryEnsureConnected(AccessInteropService accessService, JsonElement arguments, out string? error)
+    {
+        error = null;
+        if (accessService.IsConnected)
+            return true;
+
+        if (!arguments.TryGetProperty("access_file", out var fileElement) || fileElement.ValueKind != JsonValueKind.String)
+        {
+            error = "access_file is required";
+            return false;
+        }
+
+        var accessFile = fileElement.GetString();
+        if (string.IsNullOrEmpty(accessFile))
+        {
+            error = "access_file cannot be empty";
+            return false;
+        }
+
+        try
+        {
+            accessService.Connect(accessFile);
+            return accessService.IsConnected;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     static object HandleGetVBACode(AccessInteropService accessService, JsonElement arguments)
     {
         try
@@ -980,6 +1127,77 @@ class Program
 
             var result = accessService.ExecuteSql(sql, parameters, mode);
             return new { success = true, result = result };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleGetTableData(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!arguments.TryGetProperty("object_name", out var objectNameElement) || objectNameElement.ValueKind != JsonValueKind.String)
+                return new { success = false, error = "object_name parameter is required" };
+
+            var objectName = objectNameElement.GetString();
+            if (string.IsNullOrWhiteSpace(objectName))
+                return new { success = false, error = "object_name cannot be empty" };
+
+            var limit = 50;
+            if (arguments.TryGetProperty("limit", out var limitElement) && limitElement.ValueKind == JsonValueKind.Number)
+                limit = limitElement.GetInt32();
+
+            var offset = 0;
+            if (arguments.TryGetProperty("offset", out var offsetElement) && offsetElement.ValueKind == JsonValueKind.Number)
+                offset = offsetElement.GetInt32();
+
+            var rows = accessService.ReadTableData(objectName, limit, offset);
+            return new { success = true, rows = rows.ToArray(), limit, offset };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleRunMacroOrVBA(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            if (!arguments.TryGetProperty("name", out var nameElement) || nameElement.ValueKind != JsonValueKind.String)
+                return new { success = false, error = "name parameter is required" };
+
+            var name = nameElement.GetString();
+            if (string.IsNullOrWhiteSpace(name))
+                return new { success = false, error = "name cannot be empty" };
+
+            List<object?>? macroArguments = null;
+            if (arguments.TryGetProperty("arguments", out var argsElement) && argsElement.ValueKind == JsonValueKind.Array)
+            {
+                macroArguments = new List<object?>();
+                foreach (var item in argsElement.EnumerateArray())
+                {
+                    macroArguments.Add(JsonElementToObject(item));
+                }
+            }
+
+            var result = accessService.RunMacroOrVBA(name, macroArguments);
+            return new { success = true, result };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleGetFullSchemaMarkdown(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            var markdown = accessService.GetFullSchemaMarkdown();
+            return new { success = true, markdown };
         }
         catch (Exception ex)
         {
@@ -1189,6 +1407,36 @@ class Program
                 
             accessService.ImportReportFromText(reportData);
             return new { success = true, message = "Report imported successfully" };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleExportReportToPdf(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            var reportName = arguments.GetProperty("report_name").GetString();
+            if (string.IsNullOrEmpty(reportName))
+                return new { success = false, error = "Report name is required" };
+
+            var pdfPath = accessService.ExportReportToPdf(reportName);
+            return new { success = true, pdf_path = pdfPath };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleGenerateEfCoreModels(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            var source = accessService.GenerateEfCoreModels();
+            return new { success = true, source = source };
         }
         catch (Exception ex)
         {

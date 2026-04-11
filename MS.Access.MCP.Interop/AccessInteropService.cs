@@ -1502,7 +1502,7 @@ namespace MS.Access.MCP.Interop
             var procedureCode = code;
             if (string.IsNullOrEmpty(procedureCode))
             {
-                procedureCode = $"Public Sub {procedureName}()\n    ' TODO: implement \nEnd Sub";
+                procedureCode = $"Public Sub {procedureName}()\r\n    ' Add implementation here\r\nEnd Sub";
             }
 
             try

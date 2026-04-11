@@ -31,8 +31,12 @@ namespace MS.Access.MCP.Tests
             var response = Program.ProcessRpcMessage(accessService, request);
 
             Assert.NotNull(response);
-            Assert.NotNull(response.Error);
-            Assert.Contains("Not connected", response.Error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(response.Error);
+            Assert.NotNull(response.Result);
+
+            var resultJson = JsonSerializer.Serialize(response.Result);
+            Assert.Contains("\"success\":false", resultJson);
+            Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

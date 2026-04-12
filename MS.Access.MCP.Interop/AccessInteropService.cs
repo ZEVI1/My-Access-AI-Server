@@ -59,7 +59,10 @@ namespace MS.Access.MCP.Interop
                         _oleDbConnection.Close();
                         _oleDbConnection.Dispose();
                     }
-                    catch { }
+                    catch (Exception dbEx)
+                    {
+                        FileLogger.Log($"Error closing OleDb connection on failure: {dbEx.Message}");
+                    }
                     _oleDbConnection = null;
                 }
 

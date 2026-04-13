@@ -318,7 +318,6 @@ namespace MS.Access.MCP.Interop
 
         public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
 
             sql = sql.Trim();
@@ -327,6 +326,7 @@ namespace MS.Access.MCP.Interop
 
             if (sql.IndexOf(';') >= 0)
                 throw new InvalidOperationException("Multiple SQL statements are not allowed.");
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             var normalizedMode = mode?.Trim().ToLowerInvariant() ?? "select";
             if (normalizedMode != "select" && normalizedMode != "nonquery" && normalizedMode != "scalar")

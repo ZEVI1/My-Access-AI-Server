@@ -24,6 +24,22 @@ namespace MS.Access.MCP.Tests
         }
 
         [Fact]
+        public void ProcessRpcMessage_RefreshSchemaCache_ReturnsErrorWhenDisconnected()
+        {
+            using var accessService = new AccessInteropService();
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":\"refresh\",\"method\":\"tools/call\",\"params\":{\"name\":\"refresh_schema_cache\",\"arguments\":{}}}";
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.Null(response.Error);
+            Assert.NotNull(response.Result);
+
+            var resultJson = JsonSerializer.Serialize(response.Result);
+            Assert.Contains("\"success\":false", resultJson);
+            Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void ProcessRpcMessage_Ping_ReturnsSuccessResult()
         {
             using var accessService = new AccessInteropService();

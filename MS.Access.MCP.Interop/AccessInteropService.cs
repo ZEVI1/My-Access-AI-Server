@@ -123,14 +123,20 @@ namespace MS.Access.MCP.Interop
                             var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(forms);
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            FileLogger.Log($"Error releasing forms: {ex.Message}");
+                        }
 
                         try
                         {
                             var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(reports);
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            FileLogger.Log($"Error releasing reports: {ex.Message}");
+                        }
 
                         accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
                     }
@@ -797,25 +803,37 @@ namespace MS.Access.MCP.Interop
             {
                 accessType.InvokeMember("Visible", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"Error setting Visible property in LaunchAccess: {ex.Message}");
+            }
 
             try
             {
                 accessType.InvokeMember("AutomationSecurity", BindingFlags.SetProperty, null, _accessApplication, new object[] { 3 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"Error setting AutomationSecurity property in LaunchAccess: {ex.Message}");
+            }
 
             try
             {
                 accessType.InvokeMember("UserControl", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"Error setting UserControl property in LaunchAccess: {ex.Message}");
+            }
 
             try
             {
                 accessType.InvokeMember("DisplayAlerts", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"Error setting DisplayAlerts property in LaunchAccess: {ex.Message}");
+            }
 
             if (!string.IsNullOrEmpty(_currentDatabasePath))
             {

@@ -123,14 +123,14 @@ namespace MS.Access.MCP.Interop
                             var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(forms);
                         }
-                        catch { }
+                        catch (Exception ex) { FileLogger.Log($"Error releasing COM objects: {ex.Message}"); }
 
                         try
                         {
                             var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(reports);
                         }
-                        catch { }
+                        catch (Exception ex) { FileLogger.Log($"Error releasing COM objects: {ex.Message}"); }
 
                         accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
                     }
@@ -191,7 +191,7 @@ namespace MS.Access.MCP.Interop
             {
                 while (Marshal.ReleaseComObject(comObject) > 0) { }
             }
-            catch { }
+            catch (Exception ex) { FileLogger.Log($"Error releasing COM object: {ex.Message}"); }
         }
 
         private dynamic? EnsureAccessApplication()
@@ -293,7 +293,7 @@ namespace MS.Access.MCP.Interop
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex) { FileLogger.Log($"Error accessing query definition: {ex.Message}"); }
                 finally
                 {
                     ReleaseComObjectSafe(queryDef);
@@ -797,25 +797,25 @@ namespace MS.Access.MCP.Interop
             {
                 accessType.InvokeMember("Visible", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch (Exception ex) { FileLogger.Log($"Error setting Access application property: {ex.Message}"); }
 
             try
             {
                 accessType.InvokeMember("AutomationSecurity", BindingFlags.SetProperty, null, _accessApplication, new object[] { 3 });
             }
-            catch { }
+            catch (Exception ex) { FileLogger.Log($"Error setting Access application property: {ex.Message}"); }
 
             try
             {
                 accessType.InvokeMember("UserControl", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch (Exception ex) { FileLogger.Log($"Error setting Access application property: {ex.Message}"); }
 
             try
             {
                 accessType.InvokeMember("DisplayAlerts", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch (Exception ex) { FileLogger.Log($"Error setting Access application property: {ex.Message}"); }
 
             if (!string.IsNullOrEmpty(_currentDatabasePath))
             {
@@ -1059,7 +1059,7 @@ namespace MS.Access.MCP.Interop
             {
                 if (form != null)
                 {
-                    try { Marshal.ReleaseComObject(form); } catch { }
+                    try { Marshal.ReleaseComObject(form); } catch (Exception ex) { FileLogger.Log($"Error releasing form COM object: {ex.Message}"); }
                 }
             }
         }
@@ -1449,7 +1449,7 @@ namespace MS.Access.MCP.Interop
                         doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
                     }
                 }
-                catch { }
+                catch (Exception ex) { FileLogger.Log($"Error closing object in ExtractObjectUiMetadata: {ex.Message}"); }
             }
 
             return metadata;
@@ -1597,8 +1597,8 @@ namespace MS.Access.MCP.Interop
                     DateTime created = DateTime.MinValue;
                     DateTime updated = DateTime.MinValue;
 
-                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch { }
-                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch { }
+                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch (Exception ex) { FileLogger.Log($"Error parsing date: {ex.Message}"); }
+                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch (Exception ex) { FileLogger.Log($"Error parsing date: {ex.Message}"); }
 
                     systemTables.Add(new SystemTableInfo
                     {
@@ -2309,7 +2309,7 @@ namespace MS.Access.MCP.Interop
                 if (!string.IsNullOrEmpty(logDirectory))
                     Directory.CreateDirectory(logDirectory);
             }
-            catch { }
+            catch { // Ignore to prevent logging loops or unhandled exceptions in logger }
 
             BackgroundWriter = Task.Factory.StartNew(() =>
             {
@@ -2319,7 +2319,7 @@ namespace MS.Access.MCP.Interop
                     {
                         File.AppendAllText(LogPath, entry + Environment.NewLine, Encoding.UTF8);
                     }
-                    catch { }
+                    catch { // Ignore to prevent logging loops or unhandled exceptions in logger }
                 }
             }, TaskCreationOptions.LongRunning);
         }
@@ -2347,7 +2347,7 @@ namespace MS.Access.MCP.Interop
                 var line = JsonSerializer.Serialize(payload, SerializerOptions);
                 Queue.Add(line);
             }
-            catch { }
+            catch { // Ignore to prevent logging loops or unhandled exceptions in logger }
         }
 
         public static void Shutdown()
@@ -2357,7 +2357,7 @@ namespace MS.Access.MCP.Interop
                 Queue.CompleteAdding();
                 BackgroundWriter.Wait(1000);
             }
-            catch { }
+            catch { // Ignore to prevent logging loops or unhandled exceptions in logger }
         }
     }
 

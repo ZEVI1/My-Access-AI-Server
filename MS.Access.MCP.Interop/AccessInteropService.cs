@@ -123,14 +123,14 @@ namespace MS.Access.MCP.Interop
                             var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(forms);
                         }
-                        catch { }
+                        catch { /* Ignored: Releasing COM objects can fail silently during application shutdown */ }
 
                         try
                         {
                             var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(reports);
                         }
-                        catch { }
+                        catch { /* Ignored: Releasing COM objects can fail silently during application shutdown */ }
 
                         accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
                     }

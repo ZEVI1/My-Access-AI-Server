@@ -110,5 +110,14 @@ namespace MS.Access.MCP.Tests
 
             Assert.Contains("Database file not found", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
+
+        [Fact]
+        public void AccessInteropService_ExecuteSqlWithMultipleStatements_ThrowsInvalidOperationException()
+        {
+            using var accessService = new AccessInteropService();
+            var exception = Assert.Throws<InvalidOperationException>(() => accessService.ExecuteSql("SELECT * FROM A; SELECT * FROM B;"));
+
+            Assert.Contains("Multiple SQL statements are not allowed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

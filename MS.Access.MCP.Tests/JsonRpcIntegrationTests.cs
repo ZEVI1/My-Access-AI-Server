@@ -102,6 +102,22 @@ namespace MS.Access.MCP.Tests
         }
 
         [Fact]
+        public void ProcessRpcMessage_CallTool_RefreshSchemaCache_WithoutConnection_ReturnsApplicationError()
+        {
+            using var accessService = new AccessInteropService();
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"refresh_schema_cache\",\"arguments\":{}}}";
+
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.NotNull(response.Result);
+
+            var resultJson = JsonSerializer.Serialize(response.Result);
+            Assert.Contains("\"success\":false", resultJson);
+            Assert.Contains("\"error\":", resultJson);
+        }
+
+        [Fact]
         public void AccessInteropService_ConnectInvalidPath_ThrowsFileNotFoundException()
         {
             using var accessService = new AccessInteropService();

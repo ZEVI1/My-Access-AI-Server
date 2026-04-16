@@ -825,9 +825,13 @@ namespace MS.Access.MCP.Interop
                     accessType.InvokeMember("OpenCurrentDatabase", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { _currentDatabasePath });
                     FileLogger.Log("AccessInteropService.LaunchAccess: database opened successfully in Access application.");
                 }
-                catch (Exception ex)
+                catch (COMException ex)
                 {
-                    FileLogger.Log($"AccessInteropService.LaunchAccess: failed to open database in Access app ({ex.Message})");
+                    FileLogger.Log($"AccessInteropService.LaunchAccess: failed to open database in Access app (COMException: {ex.Message})");
+                }
+                catch (TargetInvocationException ex)
+                {
+                    FileLogger.Log($"AccessInteropService.LaunchAccess: failed to open database in Access app (TargetInvocationException: {ex.InnerException?.Message ?? ex.Message})");
                 }
             }
         }

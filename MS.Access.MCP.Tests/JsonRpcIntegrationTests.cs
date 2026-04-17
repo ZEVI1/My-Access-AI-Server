@@ -71,7 +71,7 @@ namespace MS.Access.MCP.Tests
             Assert.NotNull(response.Result);
 
             var resultJson = JsonSerializer.Serialize(response.Result);
-            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("\"success\":false", resultJson);
             Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -88,7 +88,7 @@ namespace MS.Access.MCP.Tests
             Assert.NotNull(response.Result);
 
             var resultJson = JsonSerializer.Serialize(response.Result);
-            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("\"success\":false", resultJson);
             Assert.Contains("Access application is not available", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -105,7 +105,7 @@ namespace MS.Access.MCP.Tests
             Assert.NotNull(response.Result);
 
             var resultJson = JsonSerializer.Serialize(response.Result);
-            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("\"success\":false", resultJson);
             Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -122,7 +122,7 @@ namespace MS.Access.MCP.Tests
             Assert.NotNull(response.Result);
 
             var resultJson = JsonSerializer.Serialize(response.Result);
-            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("\"success\":false", resultJson);
             Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 

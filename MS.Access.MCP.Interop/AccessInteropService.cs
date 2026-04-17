@@ -357,7 +357,7 @@ namespace MS.Access.MCP.Interop
 
             if (normalizedMode == "scalar")
             {
-                return command.ExecuteScalar();
+                return command.ExecuteScalar() ?? new object();
             }
 
             if (normalizedMode == "nonquery")
@@ -991,8 +991,8 @@ namespace MS.Access.MCP.Interop
             try
             {
                 // acForm = 2, acNormal = 0
-                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { formName, 2, null, null, 0 });
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null)!;
+                doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object?[] { formName, 2, null, null, 0 });
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {
@@ -1018,8 +1018,8 @@ namespace MS.Access.MCP.Interop
             try
             {
                 // acForm = 2, acSaveYes = 1
-                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null)!;
+                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 2, formName, 1 });
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {
@@ -1056,8 +1056,8 @@ namespace MS.Access.MCP.Interop
                 form.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, form, new object[] { formName });
                 form.GetType().InvokeMember("Visible", BindingFlags.SetProperty, null, form, new object[] { false });
 
-                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null)!;
+                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 2, formName, 1 });
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {
@@ -1458,11 +1458,11 @@ namespace MS.Access.MCP.Interop
                     var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
                     if (objectType == "Form")
                     {
-                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, objectName, 1 });
+                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 2, objectName, 1 });
                     }
                     else
                     {
-                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
+                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 3, objectName, 1 });
                     }
                 }
                 catch { }

@@ -123,14 +123,14 @@ namespace MS.Access.MCP.Interop
                             var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(forms);
                         }
-                        catch { }
+                        catch { /* Expected during shutdown */ }
 
                         try
                         {
                             var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(reports);
                         }
-                        catch { }
+                        catch { /* Expected during shutdown */ }
 
                         accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
                     }
@@ -191,7 +191,7 @@ namespace MS.Access.MCP.Interop
             {
                 while (Marshal.ReleaseComObject(comObject) > 0) { }
             }
-            catch { }
+            catch { /* Exceptions during COM release are expected and safe to ignore */ }
         }
 
         private dynamic? EnsureAccessApplication()

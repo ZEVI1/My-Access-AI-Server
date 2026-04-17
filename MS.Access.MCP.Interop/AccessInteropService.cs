@@ -357,7 +357,7 @@ namespace MS.Access.MCP.Interop
 
             if (normalizedMode == "scalar")
             {
-                return command.ExecuteScalar();
+                return command.ExecuteScalar() ?? new object();
             }
 
             if (normalizedMode == "nonquery")
@@ -979,60 +979,68 @@ namespace MS.Access.MCP.Interop
 
         public void OpenForm(string formName)
         {
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
 
-            if (string.IsNullOrEmpty(formName))
-                throw new ArgumentException("Form name is required", nameof(formName));
-
             try
             {
                 // acForm = 2, acNormal = 0
-                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { formName, 2, null, null, 0 });
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null)!;
+                doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object?[] { formName, 2, null, null, 0 });
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to open form '{formName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to open form '{formName}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to open form '{formName}': {tie.InnerException.Message}", tie.InnerException);
             }
         }
 
         public void CloseForm(string formName)
         {
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
 
-            if (string.IsNullOrEmpty(formName))
-                throw new ArgumentException("Form name is required", nameof(formName));
-
             try
             {
                 // acForm = 2, acSaveYes = 1
-                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null)!;
+                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 2, formName, 1 });
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to close form '{formName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to close form '{formName}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to close form '{formName}': {tie.InnerException.Message}", tie.InnerException);
             }
         }
 
         public void CreateForm(string formName)
         {
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
-
-            if (string.IsNullOrEmpty(formName))
-                throw new ArgumentException("Form name is required", nameof(formName));
 
             if (FormExists(formName))
                 throw new InvalidOperationException($"Form '{formName}' already exists.");
@@ -1048,12 +1056,16 @@ namespace MS.Access.MCP.Interop
                 form.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, form, new object[] { formName });
                 form.GetType().InvokeMember("Visible", BindingFlags.SetProperty, null, form, new object[] { false });
 
-                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null)!;
+                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 2, formName, 1 });
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to create form '{formName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to create form '{formName}': {comEx.Message}", comEx);
+            }
+            catch (System.Reflection.TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to create form '{formName}': {tie.InnerException.Message}", tie.InnerException);
             }
             finally
             {
@@ -1108,15 +1120,15 @@ namespace MS.Access.MCP.Interop
 
         public string GetVBACode(string projectName, string moduleName)
         {
+            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+                throw new ArgumentException("Project name and module name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
                 throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
-
-            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
-                throw new ArgumentException("Project name and module name are required.");
 
             try
             {
@@ -1136,9 +1148,13 @@ namespace MS.Access.MCP.Interop
                     ? (string)codeModule.GetType().InvokeMember("Lines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, lineCount })
                     : string.Empty;
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to get VBA code for module '{moduleName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to get VBA code for module '{moduleName}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to get VBA code for module '{moduleName}': {tie.InnerException.Message}", tie.InnerException);
             }
         }
 
@@ -1442,11 +1458,11 @@ namespace MS.Access.MCP.Interop
                     var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
                     if (objectType == "Form")
                     {
-                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, objectName, 1 });
+                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 2, objectName, 1 });
                     }
                     else
                     {
-                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
+                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object?[] { 3, objectName, 1 });
                     }
                 }
                 catch { }
@@ -1457,15 +1473,15 @@ namespace MS.Access.MCP.Interop
 
         public void SetVBACode(string projectName, string moduleName, string code)
         {
+            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+                throw new ArgumentException("Project name and module name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
                 throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
-
-            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
-                throw new ArgumentException("Project name and module name are required.");
 
             try
             {
@@ -1488,19 +1504,23 @@ namespace MS.Access.MCP.Interop
                 if (!string.IsNullOrEmpty(code))
                     codeModule.GetType().InvokeMember("AddFromString", BindingFlags.InvokeMethod, null, codeModule, new object[] { code });
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to set VBA code for module '{moduleName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to set VBA code for module '{moduleName}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to set VBA code for module '{moduleName}': {tie.InnerException.Message}", tie.InnerException);
             }
         }
 
         public void AddVBAProcedure(string projectName, string moduleName, string procedureName, string code)
         {
-            if (!IsConnected)
-                throw new InvalidOperationException("Not connected to database");
-
             if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName) || string.IsNullOrEmpty(procedureName))
                 throw new ArgumentException("Project name, module name, and procedure name are required.");
+
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
 
             var procedureCode = code;
             if (string.IsNullOrEmpty(procedureCode))
@@ -1692,11 +1712,11 @@ namespace MS.Access.MCP.Interop
 
         public List<ControlInfo> GetFormControls(string formName)
         {
-            if (!IsConnected)
-                throw new InvalidOperationException("Not connected to database");
-
             if (string.IsNullOrEmpty(formName))
                 throw new ArgumentException("Form name is required", nameof(formName));
+
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
@@ -1735,9 +1755,13 @@ namespace MS.Access.MCP.Interop
                     }
                 }
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to enumerate controls in form '{formName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to enumerate controls in form '{formName}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to enumerate controls in form '{formName}': {tie.InnerException.Message}", tie.InnerException);
             }
 
             return controlsInfo;
@@ -1745,15 +1769,15 @@ namespace MS.Access.MCP.Interop
 
         public ControlProperties GetControlProperties(string formName, string controlName)
         {
+            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
+                throw new ArgumentException("Form name and control name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
                 throw new InvalidOperationException("Access application is not initialized. Please launch Access first.");
-
-            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
-                throw new ArgumentException("Form name and control name are required.");
 
             try
             {
@@ -1781,24 +1805,30 @@ namespace MS.Access.MCP.Interop
 
                 return properties;
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
                 throw new InvalidOperationException(
-                    $"Failed to get properties for control '{controlName}' in form '{formName}': {ex.Message}", 
-                    ex);
+                    $"Failed to get properties for control '{controlName}' in form '{formName}': {comEx.Message}",
+                    comEx);
+            }
+            catch (System.Reflection.TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to get properties for control '{controlName}' in form '{formName}': {tie.InnerException.Message}",
+                    tie.InnerException);
             }
         }
 
         public void SetControlProperty(string formName, string controlName, string propertyName, object value)
         {
+            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName) || string.IsNullOrEmpty(propertyName))
+                throw new ArgumentException("Form name, control name, and property name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not initialized.");
-
-            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName) || string.IsNullOrEmpty(propertyName))
-                throw new ArgumentException("Form name, control name, and property name are required.");
 
             try
             {
@@ -1818,11 +1848,11 @@ namespace MS.Access.MCP.Interop
                     $"Failed to set property '{propertyName}' on control '{controlName}': {ex.InnerException?.Message}",
                     ex);
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
                 throw new InvalidOperationException(
-                    $"Failed to set property '{propertyName}' on control '{controlName}': {ex.Message}",
-                    ex);
+                    $"Failed to set property '{propertyName}' on control '{controlName}': {comEx.Message}",
+                    comEx);
             }
         }
 
@@ -1894,10 +1924,10 @@ namespace MS.Access.MCP.Interop
 
         public void ImportFormFromText(string formData)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
-
             var formInfo = JsonSerializer.Deserialize<FormExportData>(formData);
             if (formInfo == null) throw new ArgumentException("Invalid form data");
+
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
@@ -1912,9 +1942,13 @@ namespace MS.Access.MCP.Interop
                 accessApp.DoCmd.Save(2, formInfo.Name);
                 accessApp.DoCmd.Close(2, formInfo.Name, 1);
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to import form '{formInfo.Name}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to import form '{formInfo.Name}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to import form '{formInfo.Name}': {tie.InnerException.Message}", tie.InnerException);
             }
             finally
             {
@@ -1933,9 +1967,13 @@ namespace MS.Access.MCP.Interop
                 dynamic accessApp = _accessApplication;
                 accessApp.DoCmd.DeleteObject(2, formName);
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to delete form '{formName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to delete form '{formName}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to delete form '{formName}': {tie.InnerException.Message}", tie.InnerException);
             }
         }
 
@@ -1958,11 +1996,11 @@ namespace MS.Access.MCP.Interop
             if (string.IsNullOrWhiteSpace(reportName))
                 throw new ArgumentException("Report name is required.", nameof(reportName));
 
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
-
             var reports = GetReports();
             if (!reports.Exists(r => string.Equals(r.Name, reportName, StringComparison.OrdinalIgnoreCase)))
                 throw new ArgumentException($"Report '{reportName}' does not exist.", nameof(reportName));
+
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
@@ -1982,6 +2020,10 @@ namespace MS.Access.MCP.Interop
             {
                 throw new InvalidOperationException($"Failed to export report '{reportName}' to PDF: {tie.InnerException.Message}", tie.InnerException);
             }
+            catch (System.Runtime.InteropServices.COMException comEx)
+            {
+                throw new InvalidOperationException($"Failed to export report '{reportName}' to PDF: {comEx.Message}", comEx);
+            }
             catch (Exception ex)
             {
                 throw new InvalidOperationException($"Failed to export report '{reportName}' to PDF: {ex.Message}", ex);
@@ -1994,10 +2036,10 @@ namespace MS.Access.MCP.Interop
 
         public void ImportReportFromText(string reportData)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
-
             var reportInfo = JsonSerializer.Deserialize<ReportExportData>(reportData);
             if (reportInfo == null) throw new ArgumentException("Invalid report data");
+
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
@@ -2012,9 +2054,13 @@ namespace MS.Access.MCP.Interop
                 accessApp.DoCmd.Save(3, reportInfo.Name);
                 accessApp.DoCmd.Close(3, reportInfo.Name, 1);
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to import report '{reportInfo.Name}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to import report '{reportInfo.Name}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to import report '{reportInfo.Name}': {tie.InnerException.Message}", tie.InnerException);
             }
             finally
             {
@@ -2033,9 +2079,13 @@ namespace MS.Access.MCP.Interop
                 dynamic accessApp = _accessApplication;
                 accessApp.DoCmd.DeleteObject(3, reportName);
             }
-            catch (Exception ex)
+            catch (System.Runtime.InteropServices.COMException comEx)
             {
-                throw new InvalidOperationException($"Failed to delete report '{reportName}': {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to delete report '{reportName}': {comEx.Message}", comEx);
+            }
+            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            {
+                throw new InvalidOperationException($"Failed to delete report '{reportName}': {tie.InnerException.Message}", tie.InnerException);
             }
         }
 

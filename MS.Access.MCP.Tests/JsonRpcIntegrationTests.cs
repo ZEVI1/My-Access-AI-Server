@@ -59,35 +59,71 @@ namespace MS.Access.MCP.Tests
         }
 
         [Fact]
-        public void AccessInteropService_ReadTableDataWithoutConnection_ThrowsInvalidOperationException()
+        public void ProcessRpcMessage_ReadTableDataWithoutConnection_ReturnsErrorInResult()
         {
             using var accessService = new AccessInteropService();
-            var exception = Assert.Throws<InvalidOperationException>(() => accessService.ReadTableData("AnyTable"));
-            Assert.Contains("Not connected", exception.Message, StringComparison.OrdinalIgnoreCase);
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":\"test\",\"method\":\"tools/call\",\"params\":{\"name\":\"get_table_data\",\"arguments\":{\"object_name\":\"AnyTable\",\"limit\":10,\"offset\":0}}}";
+
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.Null(response.Error); // Errors from tools are in Result
+            Assert.NotNull(response.Result);
+
+            var resultJson = JsonSerializer.Serialize(response.Result);
+            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
-        public void AccessInteropService_RunMacroOrVBAWithoutAccess_ThrowsInvalidOperationException()
+        public void ProcessRpcMessage_RunMacroOrVBAWithoutAccess_ReturnsErrorInResult()
         {
             using var accessService = new AccessInteropService();
-            var exception = Assert.Throws<InvalidOperationException>(() => accessService.RunMacroOrVBA("TestMacro"));
-            Assert.Contains("Access application is not available", exception.Message, StringComparison.OrdinalIgnoreCase);
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":\"test\",\"method\":\"tools/call\",\"params\":{\"name\":\"run_macro_or_vba\",\"arguments\":{\"name\":\"TestMacro\"}}}";
+
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.Null(response.Error);
+            Assert.NotNull(response.Result);
+
+            var resultJson = JsonSerializer.Serialize(response.Result);
+            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("Access application is not available", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
-        public void AccessInteropService_GenerateEfCoreModelsWithoutConnection_ThrowsInvalidOperationException()
+        public void ProcessRpcMessage_GenerateEfCoreModelsWithoutConnection_ReturnsErrorInResult()
         {
             using var accessService = new AccessInteropService();
-            var exception = Assert.Throws<InvalidOperationException>(() => accessService.GenerateEfCoreModels());
-            Assert.Contains("Not connected", exception.Message, StringComparison.OrdinalIgnoreCase);
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":\"test\",\"method\":\"tools/call\",\"params\":{\"name\":\"generate_ef_core_models\",\"arguments\":{}}}";
+
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.Null(response.Error);
+            Assert.NotNull(response.Result);
+
+            var resultJson = JsonSerializer.Serialize(response.Result);
+            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
-        public void AccessInteropService_ExportReportToPdfWithoutConnection_ThrowsInvalidOperationException()
+        public void ProcessRpcMessage_ExportReportToPdfWithoutConnection_ReturnsErrorInResult()
         {
             using var accessService = new AccessInteropService();
-            var exception = Assert.Throws<InvalidOperationException>(() => accessService.ExportReportToPdf("AnyReport"));
-            Assert.Contains("Not connected", exception.Message, StringComparison.OrdinalIgnoreCase);
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":\"test\",\"method\":\"tools/call\",\"params\":{\"name\":\"export_report_to_pdf\",\"arguments\":{\"report_name\":\"AnyReport\"}}}";
+
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.Null(response.Error);
+            Assert.NotNull(response.Result);
+
+            var resultJson = JsonSerializer.Serialize(response.Result);
+            Assert.Contains("\"isError\":true", resultJson);
+            Assert.Contains("Not connected", resultJson, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

@@ -75,6 +75,14 @@ namespace MS.Access.MCP.Tests
         }
 
         [Fact]
+        public void AccessInteropService_ReadTableDataWithInvalidObjectName_ThrowsArgumentException()
+        {
+            using var accessService = new AccessInteropService();
+            var exception = Assert.Throws<ArgumentException>(() => accessService.ReadTableData("Invalid;Name"));
+            Assert.Contains("Invalid object name", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void AccessInteropService_GenerateEfCoreModelsWithoutConnection_ThrowsInvalidOperationException()
         {
             using var accessService = new AccessInteropService();

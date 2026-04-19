@@ -232,22 +232,72 @@ namespace MS.Access.MCP.Interop
 
             var tables = new List<TableInfo>();
             
+            // Fetch all columns in a single query to prevent N+1 queries
+            var allFields = new Dictionary<string, List<FieldInfo>>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var columnsSchema = _oleDbConnection!.GetSchema("Columns");
+                foreach (System.Data.DataRow row in columnsSchema.Rows)
+                {
+                    var tableName = row["TABLE_NAME"]?.ToString();
+                    if (string.IsNullOrEmpty(tableName)) continue;
+
+                    if (!allFields.TryGetValue(tableName, out var tableFields))
+                    {
+                        tableFields = new List<FieldInfo>();
+                        allFields[tableName] = tableFields;
+                    }
+
+                    tableFields.Add(new FieldInfo
+                    {
+                        Name = row["COLUMN_NAME"]?.ToString() ?? "",
+                        Type = row["DATA_TYPE"]?.ToString() ?? "",
+                        Size = Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"] ?? 0),
+                        Required = row["IS_NULLABLE"]?.ToString() == "NO",
+                        AllowZeroLength = true // Default value
+                    });
+                }
+            }
+            catch
+            {
+                // Fallback to individual calls if bulk fetch fails
+            }
+
             // Use OleDb to get table information
             var schema = _oleDbConnection!.GetSchema("Tables");
+            var validTableNames = new List<string>();
             
             foreach (System.Data.DataRow row in schema.Rows)
             {
                 var tableName = row["TABLE_NAME"].ToString();
                 if (!string.IsNullOrEmpty(tableName) && !tableName.StartsWith("~"))
                 {
-                    var fields = GetTableFields(tableName);
-                    tables.Add(new TableInfo
-                    {
-                        Name = tableName,
-                        Fields = fields,
-                        RecordCount = GetTableRecordCount(tableName)
-                    });
+                    validTableNames.Add(tableName);
                 }
+            }
+
+            // Batch fetch record counts
+            var recordCounts = GetTableRecordCountsBatched(validTableNames);
+
+            foreach (var tableName in validTableNames)
+            {
+                // Use bulk fields if available, otherwise fallback to N+1
+                List<FieldInfo> fields;
+                if (allFields.Count > 0 && allFields.TryGetValue(tableName, out var cachedFields))
+                {
+                    fields = cachedFields;
+                }
+                else
+                {
+                    fields = GetTableFields(tableName);
+                }
+
+                tables.Add(new TableInfo
+                {
+                    Name = tableName,
+                    Fields = fields,
+                    RecordCount = recordCounts.TryGetValue(tableName, out var count) ? count : GetTableRecordCount(tableName)
+                });
             }
 
             lock (_schemaCacheLock)
@@ -2069,6 +2119,49 @@ namespace MS.Access.MCP.Interop
             }
 
             return fields;
+        }
+
+        private Dictionary<string, long> GetTableRecordCountsBatched(List<string> tableNames)
+        {
+            var results = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            if (tableNames == null || tableNames.Count == 0) return results;
+
+            // Process in batches of 20 to avoid exceeding query complexity limits
+            const int batchSize = 20;
+            for (int j = 0; j < tableNames.Count; j += batchSize)
+            {
+                var batch = tableNames.Skip(j).Take(batchSize).ToList();
+                try
+                {
+                    var queries = new List<string>();
+                    for (int k = 0; k < batch.Count; k++)
+                    {
+                        var tableName = batch[k];
+                        // Use string literal in output to identify table name
+                        queries.Add($"SELECT '{tableName.Replace("'", "''")}' AS TableName, COUNT(*) AS RecordCount FROM [{tableName}]");
+                    }
+
+                    var unionQuery = string.Join(" UNION ALL ", queries);
+                    var command = new OleDbCommand(unionQuery, _oleDbConnection);
+
+                    using var reader = command.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        var tName = reader["TableName"].ToString();
+                        var count = Convert.ToInt64(reader["RecordCount"]);
+                        if (!string.IsNullOrEmpty(tName))
+                        {
+                            results[tName] = count;
+                        }
+                    }
+                }
+                catch
+                {
+                    // If batch fails, we silently continue; the caller falls back to GetTableRecordCount for missing tables
+                }
+            }
+
+            return results;
         }
 
         private long GetTableRecordCount(string tableName)

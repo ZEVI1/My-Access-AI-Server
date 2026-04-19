@@ -1571,14 +1571,23 @@ namespace MS.Access.MCP.Interop
 
         #region 5. System Table Metadata Access
 
-        public List<SystemTableInfo> GetSystemTables()
+        public List<SystemTableInfo> GetSystemTables(bool includeCounts = false)
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             lock (_schemaCacheLock)
             {
                 if (_cachedSystemTables != null)
+                {
+                    if (includeCounts && _cachedSystemTables.Any(t => t.RecordCount == null))
+                    {
+                        foreach (var table in _cachedSystemTables.Where(t => t.RecordCount == null))
+                        {
+                            table.RecordCount = GetTableRecordCount(table.Name);
+                        }
+                    }
                     return _cachedSystemTables;
+                }
             }
 
             var systemTables = new List<SystemTableInfo>();
@@ -1605,7 +1614,7 @@ namespace MS.Access.MCP.Interop
                         Name = name,
                         DateCreated = created,
                         LastUpdated = updated,
-                        RecordCount = GetTableRecordCount(name)
+                        RecordCount = includeCounts ? GetTableRecordCount(name) : null
                     });
                 }
             }
@@ -1623,7 +1632,7 @@ namespace MS.Access.MCP.Interop
                             Name = tableName,
                             DateCreated = DateTime.MinValue,
                             LastUpdated = DateTime.MinValue,
-                            RecordCount = GetTableRecordCount(tableName)
+                            RecordCount = includeCounts ? GetTableRecordCount(tableName) : null
                         });
                     }
                 }
@@ -2182,7 +2191,7 @@ namespace MS.Access.MCP.Interop
         public string Name { get; set; } = "";
         public DateTime DateCreated { get; set; }
         public DateTime LastUpdated { get; set; }
-        public long RecordCount { get; set; }
+        public long? RecordCount { get; set; }
     }
 
     public class MetadataInfo

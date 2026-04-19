@@ -513,7 +513,7 @@ class Program
                 new { name = "set_vba_code", description = "Set VBA code in a module", inputSchema = new { type = "object", properties = new { project_name = new { type = "string" }, module_name = new { type = "string" }, code = new { type = "string" } }, required = new string[] { "project_name", "module_name", "code" } } },
                 new { name = "add_vba_procedure", description = "Add a VBA procedure to a module", inputSchema = new { type = "object", properties = new { project_name = new { type = "string" }, module_name = new { type = "string" }, procedure_name = new { type = "string" }, code = new { type = "string" } }, required = new string[] { "project_name", "module_name", "procedure_name", "code" } } },
                 new { name = "compile_vba", description = "Compile VBA code", inputSchema = new { type = "object", properties = new { } } },
-                new { name = "get_system_tables", description = "Get list of system tables", inputSchema = new { type = "object", properties = new { } } },
+                new { name = "get_system_tables", description = "Get list of system tables", inputSchema = new { type = "object", properties = new { include_counts = new { type = "boolean" } } } },
                 new { name = "get_object_metadata", description = "Get metadata for database objects", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "execute_sql", description = "Execute raw SQL against the connected database", inputSchema = new { type = "object", properties = new { sql = new { type = "string" }, mode = new { type = "string", @enum = new string[] { "select", "nonquery", "scalar" } }, parameters = new { type = "array", items = new { type = "object" } } }, required = new string[] { "sql" } } },
                 new { name = "get_table_data", description = "Read table or query rows with pagination for safe LLM consumption", inputSchema = new { type = "object", properties = new { object_name = new { type = "string" }, limit = new { type = "integer", minimum = 1 }, offset = new { type = "integer", minimum = 0 } }, required = new string[] { "object_name" } } },
@@ -1076,7 +1076,10 @@ class Program
     {
         try
         {
-            var systemTables = accessService.GetSystemTables();
+            bool includeCounts = false;
+            if (arguments.TryGetProperty("include_counts", out var prop))
+                includeCounts = prop.GetBoolean();
+            var systemTables = accessService.GetSystemTables(includeCounts);
             return new { success = true, system_tables = systemTables.ToArray() };
         }
         catch (Exception ex)

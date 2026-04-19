@@ -59,10 +59,7 @@ namespace MS.Access.MCP.Interop
                         _oleDbConnection.Close();
                         _oleDbConnection.Dispose();
                     }
-                    catch (Exception dbEx)
-                    {
-                        FileLogger.Log($"Error closing OleDb connection on failure: {dbEx.Message}");
-                    }
+                    catch { }
                     _oleDbConnection = null;
                 }
 
@@ -1505,15 +1502,7 @@ namespace MS.Access.MCP.Interop
             var procedureCode = code;
             if (string.IsNullOrEmpty(procedureCode))
             {
-                procedureCode = $"Public Sub {procedureName}()\n" +
-                                "    On Error GoTo ErrorHandler\n\n" +
-                                "    ' TODO: implement\n\n" +
-                                "ExitProcedure:\n" +
-                                "    Exit Sub\n\n" +
-                                "ErrorHandler:\n" +
-                               $"    MsgBox \"Error \" & Err.Number & \" (\" & Err.Description & \") in procedure {procedureName}\"\n" +
-                                "    Resume ExitProcedure\n" +
-                                "End Sub";
+                procedureCode = $"Public Sub {procedureName}()\n    ' TODO: implement \nEnd Sub";
             }
 
             try

@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace MS.Access.MCP.Interop
 {
@@ -747,11 +748,20 @@ namespace MS.Access.MCP.Interop
 
         public void CreateTable(string tableName, List<FieldInfo> fields)
         {
+            if (!Regex.IsMatch(tableName, @"^[a-zA-Z0-9_]+$"))
+                throw new ArgumentException("Table name contains invalid characters. Only alphanumeric characters and underscores are allowed.", nameof(tableName));
+
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             var fieldDefinitions = new List<string>();
             foreach (var field in fields)
             {
+                if (!Regex.IsMatch(field.Name, @"^[a-zA-Z0-9_ ]+$"))
+                    throw new ArgumentException($"Field name '{field.Name}' contains invalid characters.", nameof(fields));
+
+                if (!Regex.IsMatch(field.Type, @"^[a-zA-Z0-9_ ]+$"))
+                    throw new ArgumentException($"Field type '{field.Type}' contains invalid characters.", nameof(fields));
+
                 var fieldDef = $"[{field.Name}] {field.Type}";
                 if (field.Size > 0 && field.Type.ToLower() == "text")
                     fieldDef += $"({field.Size})";

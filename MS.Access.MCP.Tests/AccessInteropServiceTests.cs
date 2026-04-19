@@ -112,10 +112,10 @@ namespace MS.Access.MCP.Tests
             Assert.Contains("### Data\\|Table", markdown);
 
             // Checking the field line for escaped characters
-            Assert.Contains("| Field\\*Name | Type\\_With\\_Underscore |", markdown);
+            Assert.Contains("| Field*Name | Type_With_Underscore |", markdown);
 
             // Checking the relationship line for escaped characters
-            Assert.Contains("| rel\\_\\`name\\` | Data\\|Table | Other\\_Table |  |", markdown);
+            Assert.Contains("| rel_`name` | Data\\|Table | Other_Table |  |", markdown);
         }
     }
 }

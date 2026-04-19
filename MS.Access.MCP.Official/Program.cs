@@ -503,6 +503,7 @@ class Program
                 new { name = "launch_access", description = "Launch Microsoft Access application", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "close_access", description = "Close Microsoft Access application", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_forms", description = "Get list of all forms in the database", inputSchema = new { type = "object", properties = new { } } },
+                new { name = "create_form", description = "Create a new form in the database", inputSchema = new { type = "object", properties = new { form_name = new { type = "string" } }, required = new string[] { "form_name" } } },
                 new { name = "get_reports", description = "Get list of all reports in the database", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_macros", description = "Get list of all macros in the database", inputSchema = new { type = "object", properties = new { } } },
                 new { name = "get_modules", description = "Get list of all modules in the database", inputSchema = new { type = "object", properties = new { } } },
@@ -561,6 +562,7 @@ class Program
             "launch_access" => HandleLaunchAccess(accessService, arguments.GetProperty("arguments")),
             "close_access" => HandleCloseAccess(accessService, arguments.GetProperty("arguments")),
             "get_forms" => HandleGetForms(accessService, arguments.GetProperty("arguments")),
+            "create_form" => HandleCreateForm(accessService, arguments.GetProperty("arguments")),
             "get_reports" => HandleGetReports(accessService, arguments.GetProperty("arguments")),
             "get_macros" => HandleGetMacros(accessService, arguments.GetProperty("arguments")),
             "get_modules" => HandleGetModules(accessService, arguments.GetProperty("arguments")),
@@ -780,6 +782,23 @@ class Program
         {
             var forms = accessService.GetForms();
             return new { success = true, forms = forms.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return new { success = false, error = ex.Message };
+        }
+    }
+
+    static object HandleCreateForm(AccessInteropService accessService, JsonElement arguments)
+    {
+        try
+        {
+            var formName = arguments.GetProperty("form_name").GetString();
+            if (string.IsNullOrEmpty(formName))
+                return new { success = false, error = "Form name is required" };
+
+            accessService.CreateForm(formName);
+            return new { success = true, message = $"Created form {formName}" };
         }
         catch (Exception ex)
         {

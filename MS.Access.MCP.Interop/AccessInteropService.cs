@@ -1505,14 +1505,14 @@ namespace MS.Access.MCP.Interop
             var procedureCode = code;
             if (string.IsNullOrEmpty(procedureCode))
             {
-                procedureCode = $"Public Sub {procedureName}()\n" +
-                                "    On Error GoTo ErrorHandler\n\n" +
-                                "    ' TODO: implement\n\n" +
-                                "ExitProcedure:\n" +
-                                "    Exit Sub\n\n" +
-                                "ErrorHandler:\n" +
-                               $"    MsgBox \"Error \" & Err.Number & \" (\" & Err.Description & \") in procedure {procedureName}\"\n" +
-                                "    Resume ExitProcedure\n" +
+                procedureCode = $"Public Sub {procedureName}()\r\n" +
+                                "    On Error GoTo ErrorHandler\r\n\r\n" +
+                                "    MsgBox \"Procedure {procedureName} executed successfully.\", vbInformation\r\n\r\n" +
+                                "ExitProcedure:\r\n" +
+                                "    Exit Sub\r\n\r\n" +
+                                "ErrorHandler:\r\n" +
+                               $"    MsgBox \"Error \" & Err.Number & \" (\" & Err.Description & \") in procedure {procedureName}\"\r\n" +
+                                "    Resume ExitProcedure\r\n" +
                                 "End Sub";
             }
 

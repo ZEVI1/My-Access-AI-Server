@@ -100,6 +100,18 @@ namespace MS.Access.MCP.Tests
             Assert.NotNull(response.Error);
             Assert.Equal(-32700, response.Error.Code);
         }
+        [Fact]
+        public void ProcessRpcMessage_MissingMethod_ReturnsInvalidRequestError()
+        {
+            using var accessService = new AccessInteropService();
+            var response = Program.ProcessRpcMessage(accessService, "{\"jsonrpc\":\"2.0\",\"id\":1}");
+
+            Assert.NotNull(response);
+            Assert.NotNull(response.Error);
+            Assert.Equal(-32600, response.Error.Code);
+            Assert.Equal("Method is required", response.Error.Message);
+        }
+
 
         [Fact]
         public void AccessInteropService_ConnectInvalidPath_ThrowsFileNotFoundException()

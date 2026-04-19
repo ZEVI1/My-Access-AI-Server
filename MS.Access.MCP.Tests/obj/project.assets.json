@@ -7618,35 +7618,36 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\ישראל רוכלין\\.nuget\\packages\\": {}
+    "/home/jules/.nuget/packages/": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\MS.Access.MCP.Tests.csproj",
+      "projectUniqueName": "/app/MS.Access.MCP.Tests/MS.Access.MCP.Tests.csproj",
       "projectName": "MS.Access.MCP.Tests",
-      "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\MS.Access.MCP.Tests.csproj",
-      "packagesPath": "C:\\Users\\ישראל רוכלין\\.nuget\\packages\\",
-      "outputPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Tests\\obj\\",
+      "projectPath": "/app/MS.Access.MCP.Tests/MS.Access.MCP.Tests.csproj",
+      "packagesPath": "/home/jules/.nuget/packages/",
+      "outputPath": "/app/MS.Access.MCP.Tests/obj/",
       "projectStyle": "PackageReference",
       "configFilePaths": [
-        "C:\\Users\\ישראל רוכלין\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        "/home/jules/.nuget/NuGet/NuGet.Config"
       ],
       "originalTargetFrameworks": [
         "net8.0-windows"
       ],
       "sources": {
+        "/usr/lib/dotnet/library-packs": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {
         "net8.0-windows7.0": {
           "targetAlias": "net8.0-windows",
           "projectReferences": {
-            "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj": {
-              "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Interop\\MS.Access.MCP.Interop.csproj"
+            "/app/MS.Access.MCP.Interop/MS.Access.MCP.Interop.csproj": {
+              "projectPath": "/app/MS.Access.MCP.Interop/MS.Access.MCP.Interop.csproj"
             },
-            "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj": {
-              "projectPath": "C:\\My-Access-AI-Server\\MS.Access.MCP.Official\\MS.Access.MCP.Official.csproj"
+            "/app/MS.Access.MCP.Official/MS.Access.MCP.Official.csproj": {
+              "projectPath": "/app/MS.Access.MCP.Official/MS.Access.MCP.Official.csproj"
             }
           }
         }
@@ -7660,7 +7661,8 @@
         "enableAudit": "true",
         "auditLevel": "low",
         "auditMode": "direct"
-      }
+      },
+      "SdkAnalysisLevel": "10.0.100"
     },
     "frameworks": {
       "net8.0-windows7.0": {
@@ -7690,12 +7692,18 @@
         ],
         "assetTargetFallback": true,
         "warn": true,
+        "downloadDependencies": [
+          {
+            "name": "Microsoft.WindowsDesktop.App.Ref",
+            "version": "[8.0.24, 8.0.24]"
+          }
+        ],
         "frameworkReferences": {
           "Microsoft.NETCore.App": {
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.419/PortableRuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/10.0.103/PortableRuntimeIdentifierGraph.json"
       }
     }
   }

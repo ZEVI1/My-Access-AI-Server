@@ -460,6 +460,11 @@ namespace MS.Access.MCP.Interop
 
             var tables = GetTables();
             var relationships = GetRelationships();
+            return GenerateFullSchemaMarkdown(tables, relationships);
+        }
+
+        public string GenerateFullSchemaMarkdown(IEnumerable<TableInfo> tables, IEnumerable<RelationshipInfo> relationships)
+        {
             var builder = new StringBuilder();
 
             builder.AppendLine("# Database schema");

@@ -383,9 +383,9 @@ namespace MS.Access.MCP.Interop
 
         public List<Dictionary<string, object?>> ReadTableData(string objectName, int limit = 50, int offset = 0)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(objectName)) throw new ArgumentException("Object name is required.", nameof(objectName));
             if (!IsValidObjectName(objectName)) throw new ArgumentException("Invalid object name.", nameof(objectName));
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (limit <= 0) limit = 50;
             if (offset < 0) offset = 0;
 

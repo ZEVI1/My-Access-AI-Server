@@ -318,7 +318,6 @@ namespace MS.Access.MCP.Interop
 
         public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
 
             sql = sql.Trim();
@@ -340,7 +339,9 @@ namespace MS.Access.MCP.Interop
             }
 
             if (parameters != null && placeholderCount != parameters.Count)
+
                 throw new ArgumentException($"SQL parameter count mismatch. Expected {placeholderCount}, got {parameters.Count}.", nameof(parameters));
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             using var command = new OleDbCommand(sql, _oleDbConnection)
             {

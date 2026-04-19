@@ -1,0 +1,5 @@
+🧪 [testing] Add tests and refactor ExecuteSql validation
+
+🎯 What: Missing test coverage and untestable validation logic for ExecuteSql().
+📊 Coverage: Added unit tests for ExecuteSql to verify parameter validation logic (empty SQL, multiple statements, invalid mode, parameter count mismatch, not connected). Modified ExecuteSql to perform validation before the IsConnected check to allow testing validation logic independently of a database connection.
+✨ Result: ExecuteSql validation logic is now covered by unit tests.

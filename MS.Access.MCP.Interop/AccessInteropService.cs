@@ -132,7 +132,7 @@ namespace MS.Access.MCP.Interop
                         }
                         catch { }
 
-                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
                     }
                     catch (Exception ex)
                     {
@@ -220,14 +220,24 @@ namespace MS.Access.MCP.Interop
 
         #region 2. Data Access Object Models
 
-        public List<TableInfo> GetTables()
+        public List<TableInfo> GetTables(bool includeRecordCount = false)
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             lock (_schemaCacheLock)
             {
                 if (_cachedTables != null)
+                {
+                    if (includeRecordCount)
+                    {
+                        foreach (var t in _cachedTables)
+                        {
+                            if (t.RecordCount == null)
+                                t.RecordCount = GetTableRecordCount(t.Name);
+                        }
+                    }
                     return _cachedTables;
+                }
             }
 
             var tables = new List<TableInfo>();
@@ -245,7 +255,7 @@ namespace MS.Access.MCP.Interop
                     {
                         Name = tableName,
                         Fields = fields,
-                        RecordCount = GetTableRecordCount(tableName)
+                        RecordCount = includeRecordCount ? GetTableRecordCount(tableName) : null
                     });
                 }
             }
@@ -318,12 +328,13 @@ namespace MS.Access.MCP.Interop
 
         public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
 
             sql = sql.Trim();
             if (sql.EndsWith(";"))
                 sql = sql.TrimEnd(';').TrimEnd();
+
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             if (sql.IndexOf(';') >= 0)
                 throw new InvalidOperationException("Multiple SQL statements are not allowed.");
@@ -383,9 +394,9 @@ namespace MS.Access.MCP.Interop
 
         public List<Dictionary<string, object?>> ReadTableData(string objectName, int limit = 50, int offset = 0)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(objectName)) throw new ArgumentException("Object name is required.", nameof(objectName));
             if (!IsValidObjectName(objectName)) throw new ArgumentException("Invalid object name.", nameof(objectName));
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (limit <= 0) limit = 50;
             if (offset < 0) offset = 0;
 
@@ -747,11 +758,17 @@ namespace MS.Access.MCP.Interop
 
         public void CreateTable(string tableName, List<FieldInfo> fields)
         {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(tableName, @"^[a-zA-Z0-9_]+$"))
+                throw new ArgumentException("Invalid table name. Only alphanumeric characters and underscores are allowed.", nameof(tableName));
+
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             var fieldDefinitions = new List<string>();
             foreach (var field in fields)
             {
+                if (!System.Text.RegularExpressions.Regex.IsMatch(field.Name, @"^[a-zA-Z0-9_]+$"))
+                    throw new ArgumentException($"Invalid field name: '{field.Name}'. Only alphanumeric characters and underscores are allowed.");
+
                 var fieldDef = $"[{field.Name}] {field.Type}";
                 if (field.Size > 0 && field.Type.ToLower() == "text")
                     fieldDef += $"({field.Size})";
@@ -767,6 +784,9 @@ namespace MS.Access.MCP.Interop
 
         public void DeleteTable(string tableName)
         {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(tableName, @"^[a-zA-Z0-9_]+$"))
+                throw new ArgumentException("Invalid table name. Only alphanumeric characters and underscores are allowed.", nameof(tableName));
+
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             var command = new OleDbCommand($"DROP TABLE [{tableName}]", _oleDbConnection);
             command.ExecuteNonQuery();
@@ -843,7 +863,7 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var accessType = _accessApplication.GetType();
-                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
             }
             catch (Exception ex)
             {
@@ -1571,14 +1591,24 @@ namespace MS.Access.MCP.Interop
 
         #region 5. System Table Metadata Access
 
-        public List<SystemTableInfo> GetSystemTables()
+        public List<SystemTableInfo> GetSystemTables(bool includeRecordCount = false)
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             lock (_schemaCacheLock)
             {
                 if (_cachedSystemTables != null)
+                {
+                    if (includeRecordCount)
+                    {
+                        foreach (var t in _cachedSystemTables)
+                        {
+                            if (t.RecordCount == null)
+                                t.RecordCount = GetTableRecordCount(t.Name);
+                        }
+                    }
                     return _cachedSystemTables;
+                }
             }
 
             var systemTables = new List<SystemTableInfo>();
@@ -1605,7 +1635,7 @@ namespace MS.Access.MCP.Interop
                         Name = name,
                         DateCreated = created,
                         LastUpdated = updated,
-                        RecordCount = GetTableRecordCount(name)
+                        RecordCount = includeRecordCount ? GetTableRecordCount(name) : null
                     });
                 }
             }
@@ -1623,7 +1653,7 @@ namespace MS.Access.MCP.Interop
                             Name = tableName,
                             DateCreated = DateTime.MinValue,
                             LastUpdated = DateTime.MinValue,
-                            RecordCount = GetTableRecordCount(tableName)
+                            RecordCount = includeRecordCount ? GetTableRecordCount(tableName) : null
                         });
                     }
                 }
@@ -2108,7 +2138,7 @@ namespace MS.Access.MCP.Interop
     {
         public string Name { get; set; } = "";
         public List<FieldInfo> Fields { get; set; } = new();
-        public long RecordCount { get; set; }
+        public long? RecordCount { get; set; }
     }
 
     public class FieldInfo
@@ -2182,7 +2212,7 @@ namespace MS.Access.MCP.Interop
         public string Name { get; set; } = "";
         public DateTime DateCreated { get; set; }
         public DateTime LastUpdated { get; set; }
-        public long RecordCount { get; set; }
+        public long? RecordCount { get; set; }
     }
 
     public class MetadataInfo

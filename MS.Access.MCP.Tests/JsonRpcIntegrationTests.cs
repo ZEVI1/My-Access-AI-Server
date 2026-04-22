@@ -59,11 +59,49 @@ namespace MS.Access.MCP.Tests
         }
 
         [Fact]
+        public void AccessInteropService_ReadTableData_InvalidObjectName_ThrowsArgumentException()
+        {
+            using var accessService = new AccessInteropService();
+            var exception = Assert.Throws<ArgumentException>(() => accessService.ReadTableData("Invalid;Name"));
+            Assert.Contains("Invalid object name", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void AccessInteropService_ReadTableDataWithoutConnection_ThrowsInvalidOperationException()
         {
             using var accessService = new AccessInteropService();
             var exception = Assert.Throws<InvalidOperationException>(() => accessService.ReadTableData("AnyTable"));
             Assert.Contains("Not connected", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void ProcessRpcMessage_RefreshSchemaCache_ReturnsSuccessFalseOnError()
+        {
+            using var accessService = new AccessInteropService();
+
+            // Should fail because it tries to call accessService.RefreshSchemaCache()
+            // which internally tries to read tables/queries/etc without connection,
+            // throwing InvalidOperationException inside the tool handler.
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"refresh_schema_cache\",\"arguments\":{}}}";
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.Null(response.Error); // Tool handler catches exception and returns in Result
+            Assert.Equal(2L, response.Id);
+
+            var resultElement = (JsonElement)response.Result;
+            Assert.False(resultElement.GetProperty("success").GetBoolean());
+            Assert.True(resultElement.TryGetProperty("error", out _));
+        }
+
+        [Fact]
+        public void AccessInteropService_CreateTable_InvalidTableName_ThrowsArgumentException()
+        {
+            using var accessService = new AccessInteropService();
+            var fields = new System.Collections.Generic.List<FieldInfo> { new FieldInfo { Name = "ValidField", Type = "TEXT" } };
+
+            var exception = Assert.Throws<ArgumentException>(() => accessService.CreateTable("Invalid;Table", fields));
+            Assert.Contains("Invalid table name", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

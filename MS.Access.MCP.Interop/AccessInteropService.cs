@@ -132,7 +132,7 @@ namespace MS.Access.MCP.Interop
                         }
                         catch { }
 
-                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
                     }
                     catch (Exception ex)
                     {
@@ -318,8 +318,8 @@ namespace MS.Access.MCP.Interop
 
         public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             sql = sql.Trim();
             if (sql.EndsWith(";"))
@@ -383,9 +383,9 @@ namespace MS.Access.MCP.Interop
 
         public List<Dictionary<string, object?>> ReadTableData(string objectName, int limit = 50, int offset = 0)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(objectName)) throw new ArgumentException("Object name is required.", nameof(objectName));
             if (!IsValidObjectName(objectName)) throw new ArgumentException("Invalid object name.", nameof(objectName));
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (limit <= 0) limit = 50;
             if (offset < 0) offset = 0;
 
@@ -843,7 +843,7 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var accessType = _accessApplication.GetType();
-                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
             }
             catch (Exception ex)
             {
@@ -979,14 +979,14 @@ namespace MS.Access.MCP.Interop
 
         public void OpenForm(string formName)
         {
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
-
-            if (string.IsNullOrEmpty(formName))
-                throw new ArgumentException("Form name is required", nameof(formName));
 
             try
             {
@@ -1002,14 +1002,14 @@ namespace MS.Access.MCP.Interop
 
         public void CloseForm(string formName)
         {
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
-
-            if (string.IsNullOrEmpty(formName))
-                throw new ArgumentException("Form name is required", nameof(formName));
 
             try
             {
@@ -1025,14 +1025,14 @@ namespace MS.Access.MCP.Interop
 
         public void CreateForm(string formName)
         {
+            if (string.IsNullOrEmpty(formName))
+                throw new ArgumentException("Form name is required", nameof(formName));
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
-
-            if (string.IsNullOrEmpty(formName))
-                throw new ArgumentException("Form name is required", nameof(formName));
 
             if (FormExists(formName))
                 throw new InvalidOperationException($"Form '{formName}' already exists.");
@@ -1108,15 +1108,15 @@ namespace MS.Access.MCP.Interop
 
         public string GetVBACode(string projectName, string moduleName)
         {
+            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+                throw new ArgumentException("Project name and module name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
                 throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
-
-            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
-                throw new ArgumentException("Project name and module name are required.");
 
             try
             {
@@ -1457,15 +1457,15 @@ namespace MS.Access.MCP.Interop
 
         public void SetVBACode(string projectName, string moduleName, string code)
         {
+            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+                throw new ArgumentException("Project name and module name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
                 throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
-
-            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
-                throw new ArgumentException("Project name and module name are required.");
 
             try
             {
@@ -1496,11 +1496,11 @@ namespace MS.Access.MCP.Interop
 
         public void AddVBAProcedure(string projectName, string moduleName, string procedureName, string code)
         {
-            if (!IsConnected)
-                throw new InvalidOperationException("Not connected to database");
-
             if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName) || string.IsNullOrEmpty(procedureName))
                 throw new ArgumentException("Project name, module name, and procedure name are required.");
+
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
 
             var procedureCode = code;
             if (string.IsNullOrEmpty(procedureCode))
@@ -1692,11 +1692,11 @@ namespace MS.Access.MCP.Interop
 
         public List<ControlInfo> GetFormControls(string formName)
         {
-            if (!IsConnected)
-                throw new InvalidOperationException("Not connected to database");
-
             if (string.IsNullOrEmpty(formName))
                 throw new ArgumentException("Form name is required", nameof(formName));
+
+            if (!IsConnected)
+                throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
@@ -1745,15 +1745,15 @@ namespace MS.Access.MCP.Interop
 
         public ControlProperties GetControlProperties(string formName, string controlName)
         {
+            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
+                throw new ArgumentException("Form name and control name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             var accessApp = EnsureAccessApplication();
             if (accessApp == null)
                 throw new InvalidOperationException("Access application is not initialized. Please launch Access first.");
-
-            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
-                throw new ArgumentException("Form name and control name are required.");
 
             try
             {
@@ -1791,14 +1791,14 @@ namespace MS.Access.MCP.Interop
 
         public void SetControlProperty(string formName, string controlName, string propertyName, object value)
         {
+            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName) || string.IsNullOrEmpty(propertyName))
+                throw new ArgumentException("Form name, control name, and property name are required.");
+
             if (!IsConnected)
                 throw new InvalidOperationException("Not connected to database");
 
             if (_accessApplication == null)
                 throw new InvalidOperationException("Access application is not initialized.");
-
-            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName) || string.IsNullOrEmpty(propertyName))
-                throw new ArgumentException("Form name, control name, and property name are required.");
 
             try
             {

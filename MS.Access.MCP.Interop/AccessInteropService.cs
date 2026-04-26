@@ -132,11 +132,15 @@ namespace MS.Access.MCP.Interop
                         }
                         catch { }
 
-                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
                     }
-                    catch (Exception ex)
+                    catch (COMException ex)
                     {
-                        FileLogger.Log($"Error quitting Access: {ex.Message}");
+                        FileLogger.Log($"Error quitting Access (COMException): {ex.Message}");
+                    }
+                    catch (System.Reflection.TargetInvocationException ex)
+                    {
+                        FileLogger.Log($"Error quitting Access (TargetInvocationException): {ex.InnerException?.Message}");
                     }
                     finally
                     {
@@ -843,11 +847,15 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var accessType = _accessApplication.GetType();
-                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
             }
-            catch (Exception ex)
+            catch (COMException ex)
             {
-                FileLogger.Log($"Error quitting Access: {ex.Message}");
+                FileLogger.Log($"Error quitting Access (COMException): {ex.Message}");
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                FileLogger.Log($"Error quitting Access (TargetInvocationException): {ex.InnerException?.Message}");
             }
             finally
             {
@@ -879,9 +887,10 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // MSysObjects might not be accessible
+                FileLogger.Log($"GetForms - Failed to access MSysObjects: {ex.Message}");
             }
 
             return forms;
@@ -909,9 +918,10 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // MSysObjects might not be accessible
+                FileLogger.Log($"GetReports - Failed to access MSysObjects: {ex.Message}");
             }
 
             return reports;
@@ -939,9 +949,10 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // MSysObjects might not be accessible
+                FileLogger.Log($"GetMacros - Failed to access MSysObjects: {ex.Message}");
             }
 
             return macros;
@@ -969,9 +980,10 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // MSysObjects might not be accessible
+                FileLogger.Log($"GetModules - Failed to access MSysObjects: {ex.Message}");
             }
 
             return modules;
@@ -1098,9 +1110,10 @@ namespace MS.Access.MCP.Interop
                     Modules = modules
                 });
             }
-            catch
+            catch (Exception ex)
             {
                 // MSysObjects might not be accessible
+                FileLogger.Log($"GetVBAModules - Failed to access MSysObjects: {ex.Message}");
             }
 
             return projects;
@@ -1661,9 +1674,10 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // MSysObjects might not be accessible, return empty list
+                FileLogger.Log($"GetFormsMetadata - Failed to access MSysObjects: {ex.Message}");
             }
 
             return metadata;

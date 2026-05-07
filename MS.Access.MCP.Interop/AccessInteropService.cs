@@ -132,7 +132,7 @@ namespace MS.Access.MCP.Interop
                         }
                         catch { }
 
-                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
                     }
                     catch (Exception ex)
                     {
@@ -843,7 +843,7 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var accessType = _accessApplication.GetType();
-                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
             }
             catch (Exception ex)
             {

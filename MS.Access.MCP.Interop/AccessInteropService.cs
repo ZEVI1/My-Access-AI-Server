@@ -576,6 +576,20 @@ namespace MS.Access.MCP.Interop
             return true;
         }
 
+        private static bool IsValidTypeName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+
+            foreach (var character in name)
+            {
+                if (!(char.IsLetterOrDigit(character) || character == ' '))
+                    return false;
+            }
+
+            return true;
+        }
+
         private static string EscapeMarkdown(string value)
         {
             if (string.IsNullOrEmpty(value))
@@ -747,11 +761,14 @@ namespace MS.Access.MCP.Interop
 
         public void CreateTable(string tableName, List<FieldInfo> fields)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+            if (!IsValidObjectName(tableName)) throw new ArgumentException("Invalid table name.", nameof(tableName));
 
             var fieldDefinitions = new List<string>();
             foreach (var field in fields)
             {
+                if (!IsValidObjectName(field.Name)) throw new ArgumentException($"Invalid field name: {field.Name}", nameof(field.Name));
+                if (!IsValidTypeName(field.Type)) throw new ArgumentException($"Invalid field type: {field.Type}", nameof(field.Type));
+
                 var fieldDef = $"[{field.Name}] {field.Type}";
                 if (field.Size > 0 && field.Type.ToLower() == "text")
                     fieldDef += $"({field.Size})";
@@ -760,6 +777,8 @@ namespace MS.Access.MCP.Interop
                 fieldDefinitions.Add(fieldDef);
             }
 
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
             var createSql = $"CREATE TABLE [{tableName}] ({string.Join(", ", fieldDefinitions)})";
             var command = new OleDbCommand(createSql, _oleDbConnection);
             command.ExecuteNonQuery();
@@ -767,7 +786,9 @@ namespace MS.Access.MCP.Interop
 
         public void DeleteTable(string tableName)
         {
+            if (!IsValidObjectName(tableName)) throw new ArgumentException("Invalid table name.", nameof(tableName));
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
             var command = new OleDbCommand($"DROP TABLE [{tableName}]", _oleDbConnection);
             command.ExecuteNonQuery();
         }

@@ -31,8 +31,13 @@ namespace MS.Access.MCP.Interop
 
         public void Connect(string databasePath)
         {
+            if (string.IsNullOrEmpty(databasePath))
+                throw new ArgumentNullException(nameof(databasePath));
+
             if (!File.Exists(databasePath))
                 throw new FileNotFoundException($"Database file not found: {databasePath}");
+
+            Disconnect();
 
             _currentDatabasePath = databasePath;
             
@@ -123,16 +128,16 @@ namespace MS.Access.MCP.Interop
                             var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(forms);
                         }
-                        catch { }
+                        catch { /* Expected exception during release of COM objects on application shutdown; can be safely ignored. */ }
 
                         try
                         {
                             var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(reports);
                         }
-                        catch { }
+                        catch { /* Expected exception during release of COM objects on application shutdown; can be safely ignored. */ }
 
-                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
                     }
                     catch (Exception ex)
                     {
@@ -220,7 +225,7 @@ namespace MS.Access.MCP.Interop
 
         #region 2. Data Access Object Models
 
-        public List<TableInfo> GetTables()
+        public List<TableInfo> GetTables(bool includeRecordCount = false)
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
@@ -232,20 +237,42 @@ namespace MS.Access.MCP.Interop
 
             var tables = new List<TableInfo>();
             
+            // Fetch all columns at once to prevent N+1 queries
+            var columnsSchema = _oleDbConnection!.GetSchema("Columns");
+            var columnsByTable = new Dictionary<string, List<FieldInfo>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (System.Data.DataRow row in columnsSchema.Rows)
+            {
+                var tblName = row["TABLE_NAME"]?.ToString() ?? "";
+                if (!columnsByTable.ContainsKey(tblName))
+                {
+                    columnsByTable[tblName] = new List<FieldInfo>();
+                }
+
+                columnsByTable[tblName].Add(new FieldInfo
+                {
+                    Name = row["COLUMN_NAME"]?.ToString() ?? "",
+                    Type = row["DATA_TYPE"]?.ToString() ?? "",
+                    Size = row["CHARACTER_MAXIMUM_LENGTH"] != DBNull.Value ? Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"]) : 0,
+                    Required = row["IS_NULLABLE"]?.ToString() == "NO",
+                    AllowZeroLength = true
+                });
+            }
+
             // Use OleDb to get table information
             var schema = _oleDbConnection!.GetSchema("Tables");
             
             foreach (System.Data.DataRow row in schema.Rows)
             {
-                var tableName = row["TABLE_NAME"].ToString();
+                var tableName = row["TABLE_NAME"]?.ToString();
                 if (!string.IsNullOrEmpty(tableName) && !tableName.StartsWith("~"))
                 {
-                    var fields = GetTableFields(tableName);
+                    var fields = columnsByTable.ContainsKey(tableName) ? columnsByTable[tableName] : new List<FieldInfo>();
                     tables.Add(new TableInfo
                     {
                         Name = tableName,
                         Fields = fields,
-                        RecordCount = GetTableRecordCount(tableName)
+                        RecordCount = includeRecordCount ? GetTableRecordCount(tableName) : null
                     });
                 }
             }
@@ -318,7 +345,6 @@ namespace MS.Access.MCP.Interop
 
         public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
 
             sql = sql.Trim();
@@ -341,6 +367,8 @@ namespace MS.Access.MCP.Interop
 
             if (parameters != null && placeholderCount != parameters.Count)
                 throw new ArgumentException($"SQL parameter count mismatch. Expected {placeholderCount}, got {parameters.Count}.", nameof(parameters));
+
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             using var command = new OleDbCommand(sql, _oleDbConnection)
             {
@@ -383,11 +411,12 @@ namespace MS.Access.MCP.Interop
 
         public List<Dictionary<string, object?>> ReadTableData(string objectName, int limit = 50, int offset = 0)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(objectName)) throw new ArgumentException("Object name is required.", nameof(objectName));
             if (!IsValidObjectName(objectName)) throw new ArgumentException("Invalid object name.", nameof(objectName));
             if (limit <= 0) limit = 50;
             if (offset < 0) offset = 0;
+
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             var sql = $"SELECT * FROM [{objectName}]";
             using var command = new OleDbCommand(sql, _oleDbConnection)
@@ -745,13 +774,32 @@ namespace MS.Access.MCP.Interop
             return relationships;
         }
 
+        private static bool IsValidTypeName(string type)
+        {
+            if (string.IsNullOrWhiteSpace(type))
+                return false;
+
+            foreach (var ch in type)
+            {
+                if (!char.IsLetterOrDigit(ch) && !char.IsWhiteSpace(ch))
+                    return false;
+            }
+
+            return true;
+        }
+
         public void CreateTable(string tableName, List<FieldInfo> fields)
         {
+            if (!IsValidObjectName(tableName)) throw new ArgumentException("Invalid table name.", nameof(tableName));
+
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             var fieldDefinitions = new List<string>();
             foreach (var field in fields)
             {
+                if (!IsValidObjectName(field.Name)) throw new ArgumentException($"Invalid field name: {field.Name}", nameof(fields));
+                if (!IsValidTypeName(field.Type)) throw new ArgumentException($"Invalid field type: {field.Type}", nameof(fields));
+
                 var fieldDef = $"[{field.Name}] {field.Type}";
                 if (field.Size > 0 && field.Type.ToLower() == "text")
                     fieldDef += $"({field.Size})";
@@ -767,6 +815,8 @@ namespace MS.Access.MCP.Interop
 
         public void DeleteTable(string tableName)
         {
+            if (!IsValidObjectName(tableName)) throw new ArgumentException("Invalid table name.", nameof(tableName));
+
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             var command = new OleDbCommand($"DROP TABLE [{tableName}]", _oleDbConnection);
             command.ExecuteNonQuery();
@@ -1597,8 +1647,8 @@ namespace MS.Access.MCP.Interop
                     DateTime created = DateTime.MinValue;
                     DateTime updated = DateTime.MinValue;
 
-                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch { }
-                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch { }
+                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch (Exception ex) { FileLogger.Log($"Error reading MSysObjects date: {ex.Message}"); }
+                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch (Exception ex) { FileLogger.Log($"Error reading MSysObjects date: {ex.Message}"); }
 
                     systemTables.Add(new SystemTableInfo
                     {
@@ -2043,36 +2093,11 @@ namespace MS.Access.MCP.Interop
 
         #region Helper Methods
 
-        private List<FieldInfo> GetTableFields(string tableName)
-        {
-            var fields = new List<FieldInfo>();
-            
-            try
-            {
-                var schema = _oleDbConnection!.GetSchema("Columns", new string[] { null!, null!, tableName });
-                
-                foreach (System.Data.DataRow row in schema.Rows)
-                {
-                    fields.Add(new FieldInfo
-                    {
-                        Name = row["COLUMN_NAME"]?.ToString() ?? "",
-                        Type = row["DATA_TYPE"]?.ToString() ?? "",
-                        Size = Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"] ?? 0),
-                        Required = row["IS_NULLABLE"]?.ToString() == "NO",
-                        AllowZeroLength = true // Default value
-                    });
-                }
-            }
-            catch
-            {
-                // Return empty list if table doesn't exist or can't be accessed
-            }
-
-            return fields;
-        }
-
         private long GetTableRecordCount(string tableName)
         {
+            if (!IsValidObjectName(tableName))
+                return 0;
+
             try
             {
                 var command = new OleDbCommand($"SELECT COUNT(*) FROM [{tableName}]", _oleDbConnection);
@@ -2108,7 +2133,7 @@ namespace MS.Access.MCP.Interop
     {
         public string Name { get; set; } = "";
         public List<FieldInfo> Fields { get; set; } = new();
-        public long RecordCount { get; set; }
+        public long? RecordCount { get; set; }
     }
 
     public class FieldInfo
@@ -2182,7 +2207,7 @@ namespace MS.Access.MCP.Interop
         public string Name { get; set; } = "";
         public DateTime DateCreated { get; set; }
         public DateTime LastUpdated { get; set; }
-        public long RecordCount { get; set; }
+        public long? RecordCount { get; set; }
     }
 
     public class MetadataInfo

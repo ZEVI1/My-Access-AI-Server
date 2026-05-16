@@ -730,9 +730,9 @@ namespace MS.Access.MCP.Interop
             {
                 relationships.Add(new RelationshipInfo
                 {
-                    Name = row["FK_NAME"]?.ToString() ?? "",
-                    Table = row["TABLE_NAME"]?.ToString() ?? "",
-                    ForeignTable = row["REFERENCED_TABLE_NAME"]?.ToString() ?? "",
+                    Name = row["FK_NAME"] != DBNull.Value ? row["FK_NAME"].ToString()! : "",
+                    Table = row["TABLE_NAME"] != DBNull.Value ? row["TABLE_NAME"].ToString()! : "",
+                    ForeignTable = row["REFERENCED_TABLE_NAME"] != DBNull.Value ? row["REFERENCED_TABLE_NAME"].ToString()! : "",
                     Attributes = ""
                 });
             }
@@ -1278,10 +1278,10 @@ namespace MS.Access.MCP.Interop
                 var schema = _oleDbConnection!.GetSchema("Columns");
                 foreach (System.Data.DataRow row in schema.Rows)
                 {
-                    var typeName = Convert.ToString(row["TYPE_NAME"]) ?? string.Empty;
-                    var dataType = Convert.ToString(row["DATA_TYPE"]) ?? string.Empty;
-                    var tableName = Convert.ToString(row["TABLE_NAME"]) ?? string.Empty;
-                    var columnName = Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty;
+                    var typeName = row["TYPE_NAME"] != DBNull.Value ? Convert.ToString(row["TYPE_NAME"]) ?? string.Empty : string.Empty;
+                    var dataType = row["DATA_TYPE"] != DBNull.Value ? Convert.ToString(row["DATA_TYPE"]) ?? string.Empty : string.Empty;
+                    var tableName = row["TABLE_NAME"] != DBNull.Value ? Convert.ToString(row["TABLE_NAME"]) ?? string.Empty : string.Empty;
+                    var columnName = row["COLUMN_NAME"] != DBNull.Value ? Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty : string.Empty;
 
                     if (typeName.IndexOf("attachment", StringComparison.OrdinalIgnoreCase) >= 0 ||
                         typeName.IndexOf("oleobject", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -1324,9 +1324,9 @@ namespace MS.Access.MCP.Interop
                 var schema = _oleDbConnection!.GetSchema("Columns");
                 foreach (System.Data.DataRow row in schema.Rows)
                 {
-                    var typeName = Convert.ToString(row["TYPE_NAME"]) ?? string.Empty;
-                    var tableName = Convert.ToString(row["TABLE_NAME"]) ?? string.Empty;
-                    var columnName = Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty;
+                    var typeName = row["TYPE_NAME"] != DBNull.Value ? Convert.ToString(row["TYPE_NAME"]) ?? string.Empty : string.Empty;
+                    var tableName = row["TABLE_NAME"] != DBNull.Value ? Convert.ToString(row["TABLE_NAME"]) ?? string.Empty : string.Empty;
+                    var columnName = row["COLUMN_NAME"] != DBNull.Value ? Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty : string.Empty;
 
                     if (typeName.IndexOf("lookup", StringComparison.OrdinalIgnoreCase) >= 0 ||
                         columnName.IndexOf("lookup", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -2055,10 +2055,10 @@ namespace MS.Access.MCP.Interop
                 {
                     fields.Add(new FieldInfo
                     {
-                        Name = row["COLUMN_NAME"]?.ToString() ?? "",
-                        Type = row["DATA_TYPE"]?.ToString() ?? "",
-                        Size = Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"] ?? 0),
-                        Required = row["IS_NULLABLE"]?.ToString() == "NO",
+                        Name = row["COLUMN_NAME"] != DBNull.Value ? row["COLUMN_NAME"].ToString()! : "",
+                        Type = row["DATA_TYPE"] != DBNull.Value ? row["DATA_TYPE"].ToString()! : "",
+                        Size = row["CHARACTER_MAXIMUM_LENGTH"] != DBNull.Value ? Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"]) : 0,
+                        Required = row["IS_NULLABLE"] != DBNull.Value && row["IS_NULLABLE"].ToString() == "NO",
                         AllowZeroLength = true // Default value
                     });
                 }

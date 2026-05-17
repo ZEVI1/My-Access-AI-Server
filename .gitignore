@@ -1,0 +1,13 @@
+# .NET / C#
+bin/
+obj/
+publish/
+*.log
+
+# Git
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates

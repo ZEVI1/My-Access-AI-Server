@@ -2057,7 +2057,7 @@ namespace MS.Access.MCP.Interop
                     {
                         Name = row["COLUMN_NAME"]?.ToString() ?? "",
                         Type = row["DATA_TYPE"]?.ToString() ?? "",
-                        Size = Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"] ?? 0),
+                        Size = row["CHARACTER_MAXIMUM_LENGTH"] != DBNull.Value ? Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"]) : 0,
                         Required = row["IS_NULLABLE"]?.ToString() == "NO",
                         AllowZeroLength = true // Default value
                     });

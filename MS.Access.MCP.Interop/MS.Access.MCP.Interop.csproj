@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
-    <EnableComHosting>true</EnableComHosting>
+    <EnableComHosting>false</EnableComHosting>
   </PropertyGroup>
 
   <ItemGroup>

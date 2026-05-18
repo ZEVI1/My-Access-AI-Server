@@ -110,5 +110,15 @@ namespace MS.Access.MCP.Tests
 
             Assert.Contains("Database file not found", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
+
+        [Fact]
+        public void AccessInteropService_ConnectNullPath_ThrowsArgumentNullException()
+        {
+            using var accessService = new AccessInteropService();
+
+            var exception = Assert.Throws<ArgumentNullException>(() => accessService.Connect(null!));
+
+            Assert.Contains("Value cannot be null. (Parameter 'databasePath')", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

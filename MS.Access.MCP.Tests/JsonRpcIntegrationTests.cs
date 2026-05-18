@@ -118,7 +118,7 @@ namespace MS.Access.MCP.Tests
 
             var exception = Assert.Throws<ArgumentNullException>(() => accessService.Connect(null!));
 
-            Assert.Contains("Value cannot be null. (Parameter 'databasePath')", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Database path cannot be null or empty. (Parameter 'databasePath')", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

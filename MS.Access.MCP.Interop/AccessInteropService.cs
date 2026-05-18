@@ -1069,7 +1069,7 @@ namespace MS.Access.MCP.Interop
             {
                 // acForm = 2, acNormal = 0
                 var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { formName, 2, null, null, 0 });
+                doCmd!.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object?[] { formName, 2, null, null, 0 });
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {
@@ -1100,7 +1100,7 @@ namespace MS.Access.MCP.Interop
             {
                 // acForm = 2, acSaveYes = 1
                 var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+                doCmd!.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
             }
             catch (Exception ex)
             {
@@ -1134,7 +1134,7 @@ namespace MS.Access.MCP.Interop
                 form.GetType().InvokeMember("Visible", BindingFlags.SetProperty, null, form, new object[] { false });
 
                 var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
-                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+                doCmd!.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
             }
             catch (Exception ex)
             {
@@ -1457,25 +1457,25 @@ namespace MS.Access.MCP.Interop
                 var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
                 if (objectType == "Form")
                 {
-                    doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { objectName, 0, null, null, 0, 1 });
+                    doCmd!.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object?[] { objectName, 0, null, null, 0, 1 });
                 }
                 else
                 {
-                    doCmd.GetType().InvokeMember("OpenReport", BindingFlags.InvokeMethod, null, doCmd, new object[] { objectName, 0, null, null, 1 });
+                    doCmd!.GetType().InvokeMember("OpenReport", BindingFlags.InvokeMethod, null, doCmd, new object?[] { objectName, 0, null, null, 1 });
                 }
 
                 var containerName = objectType == "Form" ? "Forms" : "Reports";
                 var collection = accessApp.GetType().InvokeMember(containerName, BindingFlags.GetProperty, null, accessApp, null);
-                var obj = collection.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, collection, new object[] { objectName });
-                var controls = obj.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, obj, null);
-                var controlCount = Convert.ToInt32(controls.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
+                var obj = collection!.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, collection, new object[] { objectName });
+                var controls = obj!.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, obj, null);
+                var controlCount = Convert.ToInt32(controls!.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
 
                 for (int j = 1; j <= controlCount; j++)
                 {
                     try
                     {
                         var control = controls.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, controls, new object[] { j });
-                        var name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? string.Empty;
+                        var name = Convert.ToString(control!.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? string.Empty;
                         var typeValue = control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)?.ToString() ?? string.Empty;
                         var left = SafeGetInt32(control, "Left", 0);
                         var top = SafeGetInt32(control, "Top", 0);
@@ -1527,11 +1527,11 @@ namespace MS.Access.MCP.Interop
                     var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
                     if (objectType == "Form")
                     {
-                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, objectName, 1 });
+                        doCmd!.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, objectName, 1 });
                     }
                     else
                     {
-                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
+                        doCmd!.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
                     }
                 }
                 catch { }
@@ -1793,9 +1793,9 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
-                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
-                var controls = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null);
-                var count = Convert.ToInt32(controls.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
+                var form = forms!.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+                var controls = form!.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null);
+                var count = Convert.ToInt32(controls!.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
 
                 for (int i = 1; i <= count; i++)
                 {
@@ -1804,7 +1804,7 @@ namespace MS.Access.MCP.Interop
                         var control = controls.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, controls, new object[] { i });
                         controlsInfo.Add(new ControlInfo
                         {
-                            Name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
+                            Name = Convert.ToString(control!.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
                             Type = Convert.ToString(control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)) ?? "",
                             Left = Convert.ToInt32(control.GetType().InvokeMember("Left", BindingFlags.GetProperty, null, control, null)),
                             Top = Convert.ToInt32(control.GetType().InvokeMember("Top", BindingFlags.GetProperty, null, control, null)),
@@ -1844,12 +1844,13 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
-                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
-                var control = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null).GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null), new object[] { controlName });
+                var form = forms!.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+                var formControls = form!.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null);
+                var control = formControls!.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, formControls, new object[] { controlName });
 
                 var properties = new ControlProperties
                 {
-                    Name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
+                    Name = Convert.ToString(control!.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
                     Type = Convert.ToString(control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)) ?? "",
                     Left = SafeGetInt32(control, "Left", 0),
                     Top = SafeGetInt32(control, "Top", 0),
@@ -1889,10 +1890,11 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
-                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
-                var control = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null).GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null), new object[] { controlName });
+                var form = forms!.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+                var formControls = form!.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null);
+                var control = formControls!.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, formControls, new object[] { controlName });
 
-                control.GetType().InvokeMember(propertyName,
+                control!.GetType().InvokeMember(propertyName,
                     BindingFlags.SetProperty,
                     null,
                     control,
@@ -2061,7 +2063,7 @@ namespace MS.Access.MCP.Interop
             try
             {
                 doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
-                doCmd.GetType().InvokeMember("OutputTo", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, reportName, "PDF", outputFilePath, false });
+                doCmd!.GetType().InvokeMember("OutputTo", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, reportName, "PDF", outputFilePath, false });
                 return Path.GetFullPath(outputFilePath);
             }
             catch (TargetInvocationException tie) when (tie.InnerException != null)

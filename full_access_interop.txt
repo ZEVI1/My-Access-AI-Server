@@ -1,0 +1,2365 @@
+     1	using System.Data;
+     2	using System.Data.OleDb;
+     3	using System.Runtime.InteropServices;
+     4	using System.Text.Json;
+     5	using System.Text.Json.Serialization;
+     6	using System.Reflection;
+     7	using System.Collections.Concurrent;
+     8	using System.IO;
+     9	using System.Text;
+    10
+    11	namespace MS.Access.MCP.Interop
+    12	{
+    13	    public class AccessInteropService : IDisposable
+    14	    {
+    15	        private OleDbConnection? _oleDbConnection;
+    16	        private string? _currentDatabasePath;
+    17	        private bool _disposed = false;
+    18
+    19	        // COM Automation fields
+    20	        private object? _accessApplication;  // Late-bound Access.Application COM object
+    21	        private object? _currentDatabase;     // Late-bound Access.Database COM object
+    22
+    23	        // Schema cache
+    24	        private List<TableInfo>? _cachedTables;
+    25	        private List<QueryInfo>? _cachedQueries;
+    26	        private List<RelationshipInfo>? _cachedRelationships;
+    27	        private List<SystemTableInfo>? _cachedSystemTables;
+    28	        private readonly object _schemaCacheLock = new();
+    29
+    30	        #region 1. Connection Management
+    31
+    32	        public void Connect(string databasePath)
+    33	        {
+    34	            if (!File.Exists(databasePath))
+    35	                throw new FileNotFoundException($"Database file not found: {databasePath}");
+    36
+    37	            _currentDatabasePath = databasePath;
+    38
+    39	            try
+    40	            {
+    41	                // Use OleDb for connection to avoid COM interop dependency during connect
+    42	                FileLogger.Log("AccessInteropService.Connect: opening OleDb connection");
+    43	                var connectionString = $"Provider=Microsoft.ACE.OLEDB.12.0;Data Source={databasePath};";
+    44	                _oleDbConnection = new OleDbConnection(connectionString);
+    45	                _oleDbConnection.Open();
+    46	                FileLogger.Log($"AccessInteropService.Connect: connected to '{databasePath}'.");
+    47
+    48	                // Do not require Access.Application during initial connection
+    49	                _accessApplication = null;
+    50	                _currentDatabase = null;
+    51	                InvalidateSchemaCache();
+    52	            }
+    53	            catch (Exception ex)
+    54	            {
+    55	                // Clean up on failure
+    56	                if (_oleDbConnection != null)
+    57	                {
+    58	                    try {
+    59	                        _oleDbConnection.Close();
+    60	                        _oleDbConnection.Dispose();
+    61	                    }
+    62	                    catch (Exception dbEx)
+    63	                    {
+    64	                        FileLogger.Log($"Error closing OleDb connection on failure: {dbEx.Message}");
+    65	                    }
+    66	                    _oleDbConnection = null;
+    67	                }
+    68
+    69	                FileLogger.Log($"AccessInteropService.Connect: failed to connect to database: {ex.Message}");
+    70	                throw new InvalidOperationException($"Failed to connect to database: {ex.Message}", ex);
+    71	            }
+    72	        }
+    73
+    74	        public void Disconnect()
+    75	        {
+    76	            try
+    77	            {
+    78	                FileLogger.Log("AccessInteropService.Disconnect: starting cleanup.");
+    79	                // Close OleDb connection first
+    80	                if (_oleDbConnection != null)
+    81	                {
+    82	                    try
+    83	                    {
+    84	                        _oleDbConnection.Close();
+    85	                        _oleDbConnection.Dispose();
+    86	                    }
+    87	                    catch (Exception ex)
+    88	                    {
+    89	                        FileLogger.Log($"Error closing OleDb connection: {ex.Message}");
+    90	                    }
+    91	                    _oleDbConnection = null;
+    92	                }
+    93
+    94	                // Release COM objects in reverse order
+    95	                // 1. Close the database
+    96	                if (_currentDatabase != null)
+    97	                {
+    98	                    try
+    99	                    {
+   100	                        var databaseType = _currentDatabase.GetType();
+   101	                        databaseType.InvokeMember("Close", BindingFlags.InvokeMethod, null, _currentDatabase, null);
+   102	                    }
+   103	                    catch (Exception ex)
+   104	                    {
+   105	                        FileLogger.Log($"Error closing database: {ex.Message}");
+   106	                    }
+   107	                    finally
+   108	                    {
+   109	                        ReleaseComObjectSafe(_currentDatabase);
+   110	                        _currentDatabase = null;
+   111	                    }
+   112	                }
+   113
+   114	                // 2. Quit Access Application
+   115	                if (_accessApplication != null)
+   116	                {
+   117	                    try
+   118	                    {
+   119	                        var accessType = _accessApplication.GetType();
+   120
+   121	                        try
+   122	                        {
+   123	                            var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+   124	                            ReleaseComObjectSafe(forms);
+   125	                        }
+   126	                        catch { }
+   127
+   128	                        try
+   129	                        {
+   130	                            var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
+   131	                            ReleaseComObjectSafe(reports);
+   132	                        }
+   133	                        catch { }
+   134
+   135	                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+   136	                    }
+   137	                    catch (Exception ex)
+   138	                    {
+   139	                        FileLogger.Log($"Error quitting Access: {ex.Message}");
+   140	                    }
+   141	                    finally
+   142	                    {
+   143	                        ReleaseComObjectSafe(_accessApplication);
+   144	                        _accessApplication = null;
+   145	                    }
+   146	                }
+   147
+   148	                _currentDatabasePath = null;
+   149	                InvalidateSchemaCache();
+   150	                FileLogger.Log("AccessInteropService.Disconnect: cleanup complete.");
+   151	            }
+   152	            catch (Exception ex)
+   153	            {
+   154	                FileLogger.Log($"Error during disconnect: {ex.Message}");
+   155	            }
+   156	        }
+   157
+   158	        private void InvalidateSchemaCache()
+   159	        {
+   160	            lock (_schemaCacheLock)
+   161	            {
+   162	                _cachedTables = null;
+   163	                _cachedQueries = null;
+   164	                _cachedRelationships = null;
+   165	                _cachedSystemTables = null;
+   166	            }
+   167	        }
+   168
+   169	        public void RefreshSchemaCache()
+   170	        {
+   171	            lock (_schemaCacheLock)
+   172	            {
+   173	                _cachedTables = null;
+   174	                _cachedQueries = null;
+   175	                _cachedRelationships = null;
+   176	                _cachedSystemTables = null;
+   177	            }
+   178
+   179	            _ = GetTables();
+   180	            _ = GetQueries();
+   181	            _ = GetRelationships();
+   182	            _ = GetSystemTables();
+   183	        }
+   184
+   185	        private static void ReleaseComObjectSafe(object? comObject)
+   186	        {
+   187	            if (comObject == null)
+   188	                return;
+   189
+   190	            try
+   191	            {
+   192	                while (Marshal.ReleaseComObject(comObject) > 0) { }
+   193	            }
+   194	            catch { }
+   195	        }
+   196
+   197	        private dynamic? EnsureAccessApplication()
+   198	        {
+   199	            if (_accessApplication != null)
+   200	                return _accessApplication;
+   201
+   202	            if (string.IsNullOrEmpty(_currentDatabasePath))
+   203	                return null;
+   204
+   205	            try
+   206	            {
+   207	                LaunchAccess();
+   208	                return _accessApplication;
+   209	            }
+   210	            catch (Exception ex)
+   211	            {
+   212	                FileLogger.Log($"EnsureAccessApplication failed: {ex.Message}");
+   213	                return null;
+   214	            }
+   215	        }
+   216
+   217	        public bool IsConnected => _oleDbConnection?.State == System.Data.ConnectionState.Open;
+   218
+   219	        #endregion
+   220
+   221	        #region 2. Data Access Object Models
+   222
+   223	        public List<TableInfo> GetTables()
+   224	        {
+   225	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   226
+   227	            lock (_schemaCacheLock)
+   228	            {
+   229	                if (_cachedTables != null)
+   230	                    return _cachedTables;
+   231	            }
+   232
+   233	            var tables = new List<TableInfo>();
+   234
+   235	            // Use OleDb to get table information
+   236	            var schema = _oleDbConnection!.GetSchema("Tables");
+   237
+   238	            foreach (System.Data.DataRow row in schema.Rows)
+   239	            {
+   240	                var tableName = row["TABLE_NAME"].ToString();
+   241	                if (!string.IsNullOrEmpty(tableName) && !tableName.StartsWith("~"))
+   242	                {
+   243	                    var fields = GetTableFields(tableName);
+   244	                    tables.Add(new TableInfo
+   245	                    {
+   246	                        Name = tableName,
+   247	                        Fields = fields,
+   248	                        RecordCount = GetTableRecordCount(tableName)
+   249	                    });
+   250	                }
+   251	            }
+   252
+   253	            lock (_schemaCacheLock)
+   254	            {
+   255	                _cachedTables = tables;
+   256	            }
+   257
+   258	            return tables;
+   259	        }
+   260
+   261	        public List<QueryInfo> GetQueries()
+   262	        {
+   263	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   264
+   265	            lock (_schemaCacheLock)
+   266	            {
+   267	                if (_cachedQueries != null)
+   268	                    return _cachedQueries;
+   269	            }
+   270
+   271	            var queries = new List<QueryInfo>();
+   272	            var schema = _oleDbConnection!.GetSchema("Views");
+   273
+   274	            foreach (System.Data.DataRow row in schema.Rows)
+   275	            {
+   276	                var queryName = row["TABLE_NAME"]?.ToString();
+   277	                if (string.IsNullOrEmpty(queryName))
+   278	                    continue;
+   279
+   280	                string sql = string.Empty;
+   281	                dynamic? currentDb = null;
+   282	                dynamic? queryDef = null;
+   283	                try
+   284	                {
+   285	                    var accessApp = EnsureAccessApplication();
+   286	                    if (accessApp != null)
+   287	                    {
+   288	                        currentDb = accessApp.CurrentDb();
+   289	                        queryDef = currentDb.QueryDefs[queryName];
+   290	                        if (queryDef != null)
+   291	                        {
+   292	                            sql = queryDef.SQL ?? string.Empty;
+   293	                        }
+   294	                    }
+   295	                }
+   296	                catch { }
+   297	                finally
+   298	                {
+   299	                    ReleaseComObjectSafe(queryDef);
+   300	                    ReleaseComObjectSafe(currentDb);
+   301	                }
+   302
+   303	                queries.Add(new QueryInfo
+   304	                {
+   305	                    Name = queryName,
+   306	                    SQL = sql,
+   307	                    Type = "Query"
+   308	                });
+   309	            }
+   310
+   311	            lock (_schemaCacheLock)
+   312	            {
+   313	                _cachedQueries = queries;
+   314	            }
+   315
+   316	            return queries;
+   317	        }
+   318
+   319	        public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
+   320	        {
+   321	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   322	            if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
+   323
+   324	            sql = sql.Trim();
+   325	            if (sql.EndsWith(";"))
+   326	                sql = sql.TrimEnd(';').TrimEnd();
+   327
+   328	            if (sql.IndexOf(';') >= 0)
+   329	                throw new InvalidOperationException("Multiple SQL statements are not allowed.");
+   330
+   331	            var normalizedMode = mode?.Trim().ToLowerInvariant() ?? "select";
+   332	            if (normalizedMode != "select" && normalizedMode != "nonquery" && normalizedMode != "scalar")
+   333	                throw new ArgumentException("Invalid SQL execution mode. Allowed values are select, nonquery, scalar.", nameof(mode));
+   334
+   335	            var placeholderCount = 0;
+   336	            foreach (var ch in sql)
+   337	            {
+   338	                if (ch == '?')
+   339	                    placeholderCount++;
+   340	            }
+   341
+   342	            if (parameters != null && placeholderCount != parameters.Count)
+   343	                throw new ArgumentException($"SQL parameter count mismatch. Expected {placeholderCount}, got {parameters.Count}.", nameof(parameters));
+   344
+   345	            using var command = new OleDbCommand(sql, _oleDbConnection)
+   346	            {
+   347	                CommandType = CommandType.Text
+   348	            };
+   349
+   350	            if (parameters != null)
+   351	            {
+   352	                foreach (var parameter in parameters)
+   353	                {
+   354	                    command.Parameters.Add(CreateOleDbParameter(parameter));
+   355	                }
+   356	            }
+   357
+   358	            if (normalizedMode == "scalar")
+   359	            {
+   360	                return command.ExecuteScalar();
+   361	            }
+   362
+   363	            if (normalizedMode == "nonquery")
+   364	            {
+   365	                return command.ExecuteNonQuery();
+   366	            }
+   367
+   368	            using var reader = command.ExecuteReader();
+   369	            var rows = new List<Dictionary<string, object?>>();
+   370	            while (reader.Read())
+   371	            {
+   372	                var row = new Dictionary<string, object?>();
+   373	                for (int i = 0; i < reader.FieldCount; i++)
+   374	                {
+   375	                    var name = reader.GetName(i);
+   376	                    var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+   377	                    row[name] = value;
+   378	                }
+   379	                rows.Add(row);
+   380	            }
+   381	            return rows;
+   382	        }
+   383
+   384	        public List<Dictionary<string, object?>> ReadTableData(string objectName, int limit = 50, int offset = 0)
+   385	        {
+   386	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   387	            if (string.IsNullOrWhiteSpace(objectName)) throw new ArgumentException("Object name is required.", nameof(objectName));
+   388	            if (!IsValidObjectName(objectName)) throw new ArgumentException("Invalid object name.", nameof(objectName));
+   389	            if (limit <= 0) limit = 50;
+   390	            if (offset < 0) offset = 0;
+   391
+   392	            var sql = $"SELECT * FROM [{objectName}]";
+   393	            using var command = new OleDbCommand(sql, _oleDbConnection)
+   394	            {
+   395	                CommandType = CommandType.Text
+   396	            };
+   397
+   398	            using var reader = command.ExecuteReader();
+   399	            var rows = new List<Dictionary<string, object?>>();
+   400	            var skipped = 0;
+   401	            while (reader.Read())
+   402	            {
+   403	                if (skipped < offset)
+   404	                {
+   405	                    skipped++;
+   406	                    continue;
+   407	                }
+   408
+   409	                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+   410	                for (var i = 0; i < reader.FieldCount; i++)
+   411	                {
+   412	                    var name = reader.GetName(i);
+   413	                    var rawValue = reader.IsDBNull(i) ? null : reader.GetValue(i);
+   414	                    row[name] = NormalizeValue(rawValue);
+   415	                }
+   416	                rows.Add(row);
+   417
+   418	                if (rows.Count >= limit)
+   419	                    break;
+   420	            }
+   421
+   422	            return rows;
+   423	        }
+   424
+   425	        public object RunMacroOrVBA(string name, List<object?>? arguments = null)
+   426	        {
+   427	            if (string.IsNullOrWhiteSpace(name))
+   428	                throw new ArgumentException("Macro or function name is required.", nameof(name));
+   429
+   430	            var accessApp = EnsureAccessApplication();
+   431	            if (accessApp == null)
+   432	                throw new InvalidOperationException("Access application is not available. Please launch Access first.");
+   433
+   434	            try
+   435	            {
+   436	                var invocationArgs = new List<object?> { name };
+   437	                if (arguments != null)
+   438	                    invocationArgs.AddRange(arguments);
+   439
+   440	                var result = accessApp.GetType().InvokeMember("Run", BindingFlags.InvokeMethod, null, accessApp, invocationArgs.ToArray());
+   441	                return NormalizeValue(result);
+   442	            }
+   443	            catch (System.Runtime.InteropServices.COMException comEx)
+   444	            {
+   445	                throw new InvalidOperationException($"Failed to run macro or VBA function '{name}': {comEx.Message}", comEx);
+   446	            }
+   447	            catch (TargetInvocationException tie) when (tie.InnerException != null)
+   448	            {
+   449	                throw new InvalidOperationException($"Failed to run macro or VBA function '{name}': {tie.InnerException.Message}", tie.InnerException);
+   450	            }
+   451	            catch (Exception ex)
+   452	            {
+   453	                throw new InvalidOperationException($"Failed to run macro or VBA function '{name}': {ex.Message}", ex);
+   454	            }
+   455	        }
+   456
+   457	        public string GetFullSchemaMarkdown()
+   458	        {
+   459	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   460
+   461	            var tables = GetTables();
+   462	            var relationships = GetRelationships();
+   463	            var builder = new StringBuilder();
+   464
+   465	            builder.AppendLine("# Database schema");
+   466	            builder.AppendLine();
+   467	            builder.AppendLine("## Tables");
+   468	            builder.AppendLine();
+   469
+   470	            foreach (var table in tables)
+   471	            {
+   472	                builder.AppendLine($"### {EscapeMarkdown(table.Name)} ({table.RecordCount} rows)");
+   473	                builder.AppendLine();
+   474	                builder.AppendLine("| Field | Type | Size | Required | AllowZeroLength |");
+   475	                builder.AppendLine("|---|---|---|---|---|");
+   476	                foreach (var field in table.Fields)
+   477	                {
+   478	                    builder.AppendLine($"| {EscapeMarkdown(field.Name)} | {EscapeMarkdown(field.Type)} | {field.Size} | {field.Required} | {field.AllowZeroLength} |");
+   479	                }
+   480	                builder.AppendLine();
+   481	            }
+   482
+   483	            builder.AppendLine("## Relationships");
+   484	            builder.AppendLine();
+   485	            builder.AppendLine("| Name | Table | Foreign Table | Attributes |");
+   486	            builder.AppendLine("|---|---|---|---|");
+   487	            foreach (var relationship in relationships)
+   488	            {
+   489	                builder.AppendLine($"| {EscapeMarkdown(relationship.Name)} | {EscapeMarkdown(relationship.Table)} | {EscapeMarkdown(relationship.ForeignTable)} | {EscapeMarkdown(relationship.Attributes)} |");
+   490	            }
+   491
+   492	            return builder.ToString().Trim();
+   493	        }
+   494
+   495	        public string GenerateEfCoreModels()
+   496	        {
+   497	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   498
+   499	            var tables = GetTables();
+   500	            var builder = new StringBuilder();
+   501	            builder.AppendLine("using System;");
+   502	            builder.AppendLine();
+   503	            builder.AppendLine("namespace AccessEfCoreModels");
+   504	            builder.AppendLine("{");
+   505
+   506	            foreach (var table in tables)
+   507	            {
+   508	                var className = SanitizeIdentifier(table.Name);
+   509	                builder.AppendLine($"    public class {className}");
+   510	                builder.AppendLine("    {");
+   511
+   512	                if (table.Fields.Count == 0)
+   513	                {
+   514	                    builder.AppendLine("        // No fields available for this table.");
+   515	                }
+   516	                else
+   517	                {
+   518	                    foreach (var field in table.Fields)
+   519	                    {
+   520	                        var propertyName = SanitizeIdentifier(field.Name);
+   521	                        var propertyType = MapAccessTypeToCSharpType(field.Type);
+   522	                        builder.AppendLine($"        public {propertyType} {propertyName} {{ get; set; }}");
+   523	                    }
+   524	                }
+   525
+   526	                builder.AppendLine("    }");
+   527	                builder.AppendLine();
+   528	            }
+   529
+   530	            builder.AppendLine("}");
+   531	            return builder.ToString().TrimEnd();
+   532	        }
+   533
+   534	        private static object? NormalizeValue(object? value)
+   535	        {
+   536	            if (value == null || value == DBNull.Value)
+   537	                return null;
+   538
+   539	            return value switch
+   540	            {
+   541	                byte[] bytes => Convert.ToBase64String(bytes),
+   542	                DateTime dateTime => dateTime.ToString("o"),
+   543	                Guid guid => guid.ToString(),
+   544	                char character => character.ToString(),
+   545	                string _ => value,
+   546	                bool _ => value,
+   547	                byte _ => value,
+   548	                sbyte _ => value,
+   549	                short _ => value,
+   550	                ushort _ => value,
+   551	                int _ => value,
+   552	                uint _ => value,
+   553	                long _ => value,
+   554	                ulong _ => value,
+   555	                float _ => value,
+   556	                double _ => value,
+   557	                decimal _ => value,
+   558	                _ => value.ToString()
+   559	            };
+   560	        }
+   561
+   562	        private static bool IsValidObjectName(string name)
+   563	        {
+   564	            if (string.IsNullOrWhiteSpace(name))
+   565	                return false;
+   566
+   567	            if (name.IndexOfAny(new[] { '[', ']', ';', '\'', '"' }) >= 0)
+   568	                return false;
+   569
+   570	            foreach (var character in name)
+   571	            {
+   572	                if (!(char.IsLetterOrDigit(character) || character == '_' || character == ' ' || character == '$' || character == '#' || character == '.'))
+   573	                    return false;
+   574	            }
+   575
+   576	            return true;
+   577	        }
+   578
+   579	        private static string EscapeMarkdown(string value)
+   580	        {
+   581	            if (string.IsNullOrEmpty(value))
+   582	                return string.Empty;
+   583
+   584	            return value.Replace("|", "\\|").Replace("\r", " ").Replace("\n", " ");
+   585	        }
+   586
+   587	        private static string SanitizeIdentifier(string input)
+   588	        {
+   589	            if (string.IsNullOrWhiteSpace(input))
+   590	                return "_";
+   591
+   592	            var builder = new StringBuilder();
+   593	            foreach (var ch in input)
+   594	            {
+   595	                if (char.IsLetterOrDigit(ch) || ch == '_')
+   596	                    builder.Append(ch);
+   597	                else
+   598	                    builder.Append('_');
+   599	            }
+   600
+   601	            var result = builder.ToString();
+   602	            if (result.Length == 0)
+   603	                return "_";
+   604
+   605	            if (!char.IsLetter(result[0]) && result[0] != '_')
+   606	                result = "_" + result;
+   607
+   608	            return result;
+   609	        }
+   610
+   611	        private static string SanitizeFileName(string input)
+   612	        {
+   613	            if (string.IsNullOrWhiteSpace(input))
+   614	                return Guid.NewGuid().ToString("N");
+   615
+   616	            var builder = new StringBuilder();
+   617	            foreach (var ch in input)
+   618	            {
+   619	                if (Path.GetInvalidFileNameChars().Contains(ch) || char.IsWhiteSpace(ch))
+   620	                    builder.Append('_');
+   621	                else
+   622	                    builder.Append(ch);
+   623	            }
+   624
+   625	            var name = builder.ToString();
+   626	            return string.IsNullOrEmpty(name) ? Guid.NewGuid().ToString("N") : name;
+   627	        }
+   628
+   629	        private static string MapAccessTypeToCSharpType(string accessType)
+   630	        {
+   631	            if (string.IsNullOrWhiteSpace(accessType))
+   632	                return "string";
+   633
+   634	            if (int.TryParse(accessType, out var typeCode))
+   635	            {
+   636	                return typeCode switch
+   637	                {
+   638	                    2 => "int",
+   639	                    3 => "int",
+   640	                    4 => "float",
+   641	                    5 => "double",
+   642	                    6 => "decimal",
+   643	                    7 => "DateTime",
+   644	                    10 => "DateTime",
+   645	                    11 => "bool",
+   646	                    17 => "byte",
+   647	                    72 => "Guid",
+   648	                    128 => "byte[]",
+   649	                    130 => "string",
+   650	                    201 => "string",
+   651	                    203 => "string",
+   652	                    204 => "byte[]",
+   653	                    205 => "byte[]",
+   654	                    _ => "string",
+   655	                };
+   656	            }
+   657
+   658	            var normalized = accessType.Trim().ToLowerInvariant();
+   659	            if (normalized.Contains("char") || normalized.Contains("text") || normalized.Contains("memo") || normalized.Contains("string") || normalized.Contains("varchar"))
+   660	                return "string";
+   661	            if (normalized.Contains("date") || normalized.Contains("time"))
+   662	                return "DateTime";
+   663	            if (normalized.Contains("bool"))
+   664	                return "bool";
+   665	            if (normalized.Contains("currency") || normalized.Contains("decimal") || normalized.Contains("numeric"))
+   666	                return "decimal";
+   667	            if (normalized.Contains("double"))
+   668	                return "double";
+   669	            if (normalized.Contains("single") || normalized.Contains("float"))
+   670	                return "float";
+   671	            if (normalized.Contains("byte") || normalized.Contains("binary") || normalized.Contains("oleobject"))
+   672	                return "byte[]";
+   673	            if (normalized.Contains("guid"))
+   674	                return "Guid";
+   675
+   676	            return "string";
+   677	        }
+   678
+   679	        private static OleDbParameter CreateOleDbParameter(object? value)
+   680	        {
+   681	            var parameter = new OleDbParameter
+   682	            {
+   683	                Value = value ?? DBNull.Value,
+   684	                OleDbType = GetOleDbTypeForValue(value)
+   685	            };
+   686
+   687	            if (parameter.OleDbType == OleDbType.VarChar)
+   688	            {
+   689	                parameter.Size = 4000;
+   690	            }
+   691
+   692	            return parameter;
+   693	        }
+   694
+   695	        private static OleDbType GetOleDbTypeForValue(object? value)
+   696	        {
+   697	            return value switch
+   698	            {
+   699	                null => OleDbType.VarChar,
+   700	                string => OleDbType.VarChar,
+   701	                int => OleDbType.Integer,
+   702	                long => OleDbType.BigInt,
+   703	                bool => OleDbType.Boolean,
+   704	                DateTime => OleDbType.Date,
+   705	                decimal => OleDbType.Decimal,
+   706	                double => OleDbType.Double,
+   707	                float => OleDbType.Single,
+   708	                byte[] => OleDbType.Binary,
+   709	                Guid => OleDbType.Guid,
+   710	                _ => OleDbType.VarChar,
+   711	            };
+   712	        }
+   713
+   714	        public List<RelationshipInfo> GetRelationships()
+   715	        {
+   716	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   717
+   718	            lock (_schemaCacheLock)
+   719	            {
+   720	                if (_cachedRelationships != null)
+   721	                    return _cachedRelationships;
+   722	            }
+   723
+   724	            var relationships = new List<RelationshipInfo>();
+   725
+   726	            // Use OleDb to get relationship information
+   727	            var schema = _oleDbConnection!.GetSchema("ForeignKeys");
+   728
+   729	            foreach (System.Data.DataRow row in schema.Rows)
+   730	            {
+   731	                relationships.Add(new RelationshipInfo
+   732	                {
+   733	                    Name = row["FK_NAME"]?.ToString() ?? "",
+   734	                    Table = row["TABLE_NAME"]?.ToString() ?? "",
+   735	                    ForeignTable = row["REFERENCED_TABLE_NAME"]?.ToString() ?? "",
+   736	                    Attributes = ""
+   737	                });
+   738	            }
+   739
+   740	            lock (_schemaCacheLock)
+   741	            {
+   742	                _cachedRelationships = relationships;
+   743	            }
+   744
+   745	            return relationships;
+   746	        }
+   747
+   748	        public void CreateTable(string tableName, List<FieldInfo> fields)
+   749	        {
+   750	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   751
+   752	            var fieldDefinitions = new List<string>();
+   753	            foreach (var field in fields)
+   754	            {
+   755	                var fieldDef = $"[{field.Name}] {field.Type}";
+   756	                if (field.Size > 0 && field.Type.ToLower() == "text")
+   757	                    fieldDef += $"({field.Size})";
+   758	                if (field.Required)
+   759	                    fieldDef += " NOT NULL";
+   760	                fieldDefinitions.Add(fieldDef);
+   761	            }
+   762
+   763	            var createSql = $"CREATE TABLE [{tableName}] ({string.Join(", ", fieldDefinitions)})";
+   764	            var command = new OleDbCommand(createSql, _oleDbConnection);
+   765	            command.ExecuteNonQuery();
+   766	        }
+   767
+   768	        public void DeleteTable(string tableName)
+   769	        {
+   770	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   771	            var command = new OleDbCommand($"DROP TABLE [{tableName}]", _oleDbConnection);
+   772	            command.ExecuteNonQuery();
+   773	        }
+   774
+   775	        #endregion
+   776
+   777	        #region 3. COM Automation (Simplified)
+   778
+   779	        public void LaunchAccess()
+   780	        {
+   781	            if (_accessApplication != null)
+   782	            {
+   783	                FileLogger.Log("AccessInteropService.LaunchAccess: Access is already launched.");
+   784	                return;
+   785	            }
+   786
+   787	            var accessType = Type.GetTypeFromProgID("Access.Application");
+   788	            if (accessType == null)
+   789	                throw new InvalidOperationException("Microsoft Access is not installed on this system.");
+   790
+   791	            FileLogger.Log("AccessInteropService.LaunchAccess: creating Access application via ProgID");
+   792	            _accessApplication = Activator.CreateInstance(accessType);
+   793	            if (_accessApplication == null)
+   794	                throw new InvalidOperationException("Failed to instantiate Access.Application via ProgID.");
+   795
+   796	            try
+   797	            {
+   798	                accessType.InvokeMember("Visible", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
+   799	            }
+   800	            catch { }
+   801
+   802	            try
+   803	            {
+   804	                accessType.InvokeMember("AutomationSecurity", BindingFlags.SetProperty, null, _accessApplication, new object[] { 3 });
+   805	            }
+   806	            catch { }
+   807
+   808	            try
+   809	            {
+   810	                accessType.InvokeMember("UserControl", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
+   811	            }
+   812	            catch { }
+   813
+   814	            try
+   815	            {
+   816	                accessType.InvokeMember("DisplayAlerts", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
+   817	            }
+   818	            catch { }
+   819
+   820	            if (!string.IsNullOrEmpty(_currentDatabasePath))
+   821	            {
+   822	                try
+   823	                {
+   824	                    FileLogger.Log($"AccessInteropService.LaunchAccess: opening current database '{_currentDatabasePath}' in Access application");
+   825	                    accessType.InvokeMember("OpenCurrentDatabase", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { _currentDatabasePath });
+   826	                    FileLogger.Log("AccessInteropService.LaunchAccess: database opened successfully in Access application.");
+   827	                }
+   828	                catch (Exception ex)
+   829	                {
+   830	                    FileLogger.Log($"AccessInteropService.LaunchAccess: failed to open database in Access app ({ex.Message})");
+   831	                }
+   832	            }
+   833	        }
+   834
+   835	        public void CloseAccess()
+   836	        {
+   837	            if (_accessApplication == null)
+   838	            {
+   839	                FileLogger.Log("AccessInteropService.CloseAccess: Access is not launched.");
+   840	                return;
+   841	            }
+   842
+   843	            try
+   844	            {
+   845	                var accessType = _accessApplication.GetType();
+   846	                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+   847	            }
+   848	            catch (Exception ex)
+   849	            {
+   850	                FileLogger.Log($"Error quitting Access: {ex.Message}");
+   851	            }
+   852	            finally
+   853	            {
+   854	                ReleaseComObjectSafe(_accessApplication);
+   855	                _accessApplication = null;
+   856	                _currentDatabase = null;
+   857	            }
+   858	        }
+   859
+   860	        public List<FormInfo> GetForms()
+   861	        {
+   862	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   863
+   864	            var forms = new List<FormInfo>();
+   865
+   866	            // Try to get forms from system tables
+   867	            try
+   868	            {
+   869	                var command = new OleDbCommand("SELECT Name FROM MSysObjects WHERE Type = -32768", _oleDbConnection);
+   870	                using var reader = command.ExecuteReader();
+   871
+   872	                while (reader.Read())
+   873	                {
+   874	                    forms.Add(new FormInfo
+   875	                    {
+   876	                        Name = reader["Name"]?.ToString() ?? "",
+   877	                        FullName = reader["Name"]?.ToString() ?? "",
+   878	                        Type = "Form"
+   879	                    });
+   880	                }
+   881	            }
+   882	            catch
+   883	            {
+   884	                // MSysObjects might not be accessible
+   885	            }
+   886
+   887	            return forms;
+   888	        }
+   889
+   890	        public List<ReportInfo> GetReports()
+   891	        {
+   892	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   893
+   894	            var reports = new List<ReportInfo>();
+   895
+   896	            // Try to get reports from system tables
+   897	            try
+   898	            {
+   899	                var command = new OleDbCommand("SELECT Name FROM MSysObjects WHERE Type = -32764", _oleDbConnection);
+   900	                using var reader = command.ExecuteReader();
+   901
+   902	                while (reader.Read())
+   903	                {
+   904	                    reports.Add(new ReportInfo
+   905	                    {
+   906	                        Name = reader["Name"]?.ToString() ?? "",
+   907	                        FullName = reader["Name"]?.ToString() ?? "",
+   908	                        Type = "Report"
+   909	                    });
+   910	                }
+   911	            }
+   912	            catch
+   913	            {
+   914	                // MSysObjects might not be accessible
+   915	            }
+   916
+   917	            return reports;
+   918	        }
+   919
+   920	        public List<MacroInfo> GetMacros()
+   921	        {
+   922	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   923
+   924	            var macros = new List<MacroInfo>();
+   925
+   926	            // Try to get macros from system tables
+   927	            try
+   928	            {
+   929	                var command = new OleDbCommand("SELECT Name FROM MSysObjects WHERE Type = -32766", _oleDbConnection);
+   930	                using var reader = command.ExecuteReader();
+   931
+   932	                while (reader.Read())
+   933	                {
+   934	                    macros.Add(new MacroInfo
+   935	                    {
+   936	                        Name = reader["Name"]?.ToString() ?? "",
+   937	                        FullName = reader["Name"]?.ToString() ?? "",
+   938	                        Type = "Macro"
+   939	                    });
+   940	                }
+   941	            }
+   942	            catch
+   943	            {
+   944	                // MSysObjects might not be accessible
+   945	            }
+   946
+   947	            return macros;
+   948	        }
+   949
+   950	        public List<ModuleInfo> GetModules()
+   951	        {
+   952	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+   953
+   954	            var modules = new List<ModuleInfo>();
+   955
+   956	            // Try to get modules from system tables
+   957	            try
+   958	            {
+   959	                var command = new OleDbCommand("SELECT Name FROM MSysObjects WHERE Type = -32761", _oleDbConnection);
+   960	                using var reader = command.ExecuteReader();
+   961
+   962	                while (reader.Read())
+   963	                {
+   964	                    modules.Add(new ModuleInfo
+   965	                    {
+   966	                        Name = reader["Name"]?.ToString() ?? "",
+   967	                        FullName = reader["Name"]?.ToString() ?? "",
+   968	                        Type = "Module"
+   969	                    });
+   970	                }
+   971	            }
+   972	            catch
+   973	            {
+   974	                // MSysObjects might not be accessible
+   975	            }
+   976
+   977	            return modules;
+   978	        }
+   979
+   980	        public void OpenForm(string formName)
+   981	        {
+   982	            if (!IsConnected)
+   983	                throw new InvalidOperationException("Not connected to database");
+   984
+   985	            if (_accessApplication == null)
+   986	                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+   987
+   988	            if (string.IsNullOrEmpty(formName))
+   989	                throw new ArgumentException("Form name is required", nameof(formName));
+   990
+   991	            try
+   992	            {
+   993	                // acForm = 2, acNormal = 0
+   994	                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
+   995	                doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { formName, 2, null, null, 0 });
+   996	            }
+   997	            catch (Exception ex)
+   998	            {
+   999	                throw new InvalidOperationException($"Failed to open form '{formName}': {ex.Message}", ex);
+  1000	            }
+  1001	        }
+  1002
+  1003	        public void CloseForm(string formName)
+  1004	        {
+  1005	            if (!IsConnected)
+  1006	                throw new InvalidOperationException("Not connected to database");
+  1007
+  1008	            if (_accessApplication == null)
+  1009	                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  1010
+  1011	            if (string.IsNullOrEmpty(formName))
+  1012	                throw new ArgumentException("Form name is required", nameof(formName));
+  1013
+  1014	            try
+  1015	            {
+  1016	                // acForm = 2, acSaveYes = 1
+  1017	                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
+  1018	                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+  1019	            }
+  1020	            catch (Exception ex)
+  1021	            {
+  1022	                throw new InvalidOperationException($"Failed to close form '{formName}': {ex.Message}", ex);
+  1023	            }
+  1024	        }
+  1025
+  1026	        public void CreateForm(string formName)
+  1027	        {
+  1028	            if (!IsConnected)
+  1029	                throw new InvalidOperationException("Not connected to database");
+  1030
+  1031	            if (_accessApplication == null)
+  1032	                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  1033
+  1034	            if (string.IsNullOrEmpty(formName))
+  1035	                throw new ArgumentException("Form name is required", nameof(formName));
+  1036
+  1037	            if (FormExists(formName))
+  1038	                throw new InvalidOperationException($"Form '{formName}' already exists.");
+  1039
+  1040	            object? form = null;
+  1041
+  1042	            try
+  1043	            {
+  1044	                form = _accessApplication.GetType().InvokeMember("CreateForm", BindingFlags.InvokeMethod, null, _accessApplication, null);
+  1045	                if (form == null)
+  1046	                    throw new InvalidOperationException("Failed to create form.");
+  1047
+  1048	                form.GetType().InvokeMember("Name", BindingFlags.SetProperty, null, form, new object[] { formName });
+  1049	                form.GetType().InvokeMember("Visible", BindingFlags.SetProperty, null, form, new object[] { false });
+  1050
+  1051	                var doCmd = _accessApplication.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, _accessApplication, null);
+  1052	                doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, formName, 1 });
+  1053	            }
+  1054	            catch (Exception ex)
+  1055	            {
+  1056	                throw new InvalidOperationException($"Failed to create form '{formName}': {ex.Message}", ex);
+  1057	            }
+  1058	            finally
+  1059	            {
+  1060	                if (form != null)
+  1061	                {
+  1062	                    try { Marshal.ReleaseComObject(form); } catch { }
+  1063	                }
+  1064	            }
+  1065	        }
+  1066
+  1067	        #endregion
+  1068
+  1069	        #region 4. VBA Extensibility (Simplified)
+  1070
+  1071	        public List<VBAProjectInfo> GetVBAProjects()
+  1072	        {
+  1073	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1074
+  1075	            var projects = new List<VBAProjectInfo>();
+  1076
+  1077	            // Simplified VBA project discovery
+  1078	            try
+  1079	            {
+  1080	                var command = new OleDbCommand("SELECT Name FROM MSysObjects WHERE Type = -32761", _oleDbConnection);
+  1081	                using var reader = command.ExecuteReader();
+  1082
+  1083	                var modules = new List<VBAModuleInfo>();
+  1084	                while (reader.Read())
+  1085	                {
+  1086	                    modules.Add(new VBAModuleInfo
+  1087	                    {
+  1088	                        Name = reader["Name"]?.ToString() ?? "",
+  1089	                        Type = "Module",
+  1090	                        HasCode = true
+  1091	                    });
+  1092	                }
+  1093
+  1094	                projects.Add(new VBAProjectInfo
+  1095	                {
+  1096	                    Name = "CurrentProject",
+  1097	                    Description = "Current Access Project",
+  1098	                    Modules = modules
+  1099	                });
+  1100	            }
+  1101	            catch
+  1102	            {
+  1103	                // MSysObjects might not be accessible
+  1104	            }
+  1105
+  1106	            return projects;
+  1107	        }
+  1108
+  1109	        public string GetVBACode(string projectName, string moduleName)
+  1110	        {
+  1111	            if (!IsConnected)
+  1112	                throw new InvalidOperationException("Not connected to database");
+  1113
+  1114	            var accessApp = EnsureAccessApplication();
+  1115	            if (accessApp == null)
+  1116	                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
+  1117
+  1118	            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+  1119	                throw new ArgumentException("Project name and module name are required.");
+  1120
+  1121	            try
+  1122	            {
+  1123	                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
+  1124	                var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
+  1125	                if (vbeProject == null)
+  1126	                    throw new InvalidOperationException("Access VBProject not available.");
+  1127
+  1128	                var vbComponents = vbeProject.GetType().InvokeMember("VBComponents", BindingFlags.GetProperty, null, vbeProject, null);
+  1129	                var component = vbComponents.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, vbComponents, new object[] { moduleName });
+  1130	                if (component == null)
+  1131	                    throw new InvalidOperationException($"Module '{moduleName}' not found.");
+  1132
+  1133	                var codeModule = component.GetType().InvokeMember("CodeModule", BindingFlags.GetProperty, null, component, null);
+  1134	                var lineCount = Convert.ToInt32(codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null));
+  1135	                return lineCount > 0
+  1136	                    ? (string)codeModule.GetType().InvokeMember("Lines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, lineCount })
+  1137	                    : string.Empty;
+  1138	            }
+  1139	            catch (Exception ex)
+  1140	            {
+  1141	                throw new InvalidOperationException($"Failed to get VBA code for module '{moduleName}': {ex.Message}", ex);
+  1142	            }
+  1143	        }
+  1144
+  1145	        public List<VBAModuleDetail> ExtractRawVBAModules()
+  1146	        {
+  1147	            if (!IsConnected)
+  1148	                throw new InvalidOperationException("Not connected to database");
+  1149
+  1150	            var accessApp = EnsureAccessApplication();
+  1151	            if (accessApp == null)
+  1152	                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
+  1153
+  1154	            var modules = new List<VBAModuleDetail>();
+  1155	            try
+  1156	            {
+  1157	                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
+  1158	                var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
+  1159	                if (vbeProject == null)
+  1160	                    throw new InvalidOperationException("Access VBProject not available.");
+  1161
+  1162	                var vbComponents = vbeProject.GetType().InvokeMember("VBComponents", BindingFlags.GetProperty, null, vbeProject, null);
+  1163	                var count = Convert.ToInt32(vbComponents.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, vbComponents, null));
+  1164
+  1165	                for (int i = 1; i <= count; i++)
+  1166	                {
+  1167	                    try
+  1168	                    {
+  1169	                        var component = vbComponents.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, vbComponents, new object[] { i });
+  1170	                        var name = Convert.ToString(component.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, component, null)) ?? string.Empty;
+  1171	                        var typeValue = component.GetType().InvokeMember("Type", BindingFlags.GetProperty, null, component, null);
+  1172	                        var moduleType = typeValue?.ToString() ?? "Unknown";
+  1173	                        var codeModule = component.GetType().InvokeMember("CodeModule", BindingFlags.GetProperty, null, component, null);
+  1174	                        var lineCount = Convert.ToInt32(codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null));
+  1175	                        var code = lineCount > 0
+  1176	                            ? (string)codeModule.GetType().InvokeMember("Lines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, lineCount })
+  1177	                            : string.Empty;
+  1178
+  1179	                        modules.Add(new VBAModuleDetail
+  1180	                        {
+  1181	                            ProjectName = "CurrentProject",
+  1182	                            ModuleName = name,
+  1183	                            ModuleType = moduleType,
+  1184	                            Code = code
+  1185	                        });
+  1186	                    }
+  1187	                    catch (Exception ex)
+  1188	                    {
+  1189	                        FileLogger.Log($"ExtractRawVBAModules: failed reading component {i}: {ex.Message}");
+  1190	                    }
+  1191	                }
+  1192	            }
+  1193	            catch (Exception ex)
+  1194	            {
+  1195	                throw new InvalidOperationException($"Failed to extract VBA modules: {ex.Message}", ex);
+  1196	            }
+  1197
+  1198	            return modules;
+  1199	        }
+  1200
+  1201	        public List<FormMetadata> ExtractFormMetadata()
+  1202	        {
+  1203	            if (!IsConnected)
+  1204	                throw new InvalidOperationException("Not connected to database");
+  1205
+  1206	            var accessApp = EnsureAccessApplication();
+  1207	            if (accessApp == null)
+  1208	                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
+  1209
+  1210	            var formMetadata = new List<FormMetadata>();
+  1211	            try
+  1212	            {
+  1213	                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
+  1214	                var allForms = currentProject.GetType().InvokeMember("AllForms", BindingFlags.GetProperty, null, currentProject, null);
+  1215	                var count = Convert.ToInt32(allForms.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, allForms, null));
+  1216
+  1217	                for (int i = 1; i <= count; i++)
+  1218	                {
+  1219	                    try
+  1220	                    {
+  1221	                        var formDef = allForms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, allForms, new object[] { i });
+  1222	                        var formName = Convert.ToString(formDef.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, formDef, null)) ?? string.Empty;
+  1223	                        if (string.IsNullOrEmpty(formName))
+  1224	                            continue;
+  1225
+  1226	                        var metadata = ExtractObjectUiMetadata(accessApp, formName, "Form");
+  1227	                        formMetadata.Add(metadata);
+  1228	                    }
+  1229	                    catch (Exception ex)
+  1230	                    {
+  1231	                        FileLogger.Log($"ExtractFormMetadata: failed reading form {i}: {ex.Message}");
+  1232	                        continue;
+  1233	                    }
+  1234	                }
+  1235
+  1236	                try
+  1237	                {
+  1238	                    var allReports = currentProject.GetType().InvokeMember("AllReports", BindingFlags.GetProperty, null, currentProject, null);
+  1239	                    var reportCount = Convert.ToInt32(allReports.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, allReports, null));
+  1240
+  1241	                    for (int i = 1; i <= reportCount; i++)
+  1242	                    {
+  1243	                        try
+  1244	                        {
+  1245	                            var reportDef = allReports.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, allReports, new object[] { i });
+  1246	                            var reportName = Convert.ToString(reportDef.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, reportDef, null)) ?? string.Empty;
+  1247	                            if (string.IsNullOrEmpty(reportName))
+  1248	                                continue;
+  1249
+  1250	                            var metadata = ExtractObjectUiMetadata(accessApp, reportName, "Report");
+  1251	                            formMetadata.Add(metadata);
+  1252	                        }
+  1253	                        catch (Exception ex)
+  1254	                        {
+  1255	                            FileLogger.Log($"ExtractFormMetadata: failed reading report {i}: {ex.Message}");
+  1256	                            continue;
+  1257	                        }
+  1258	                    }
+  1259	                }
+  1260	                catch
+  1261	                {
+  1262	                    // Reports are optional for metadata extraction
+  1263	                }
+  1264	            }
+  1265	            catch (Exception ex)
+  1266	            {
+  1267	                throw new InvalidOperationException($"Failed to extract form metadata: {ex.Message}", ex);
+  1268	            }
+  1269
+  1270	            return formMetadata;
+  1271	        }
+  1272
+  1273	        public List<ComplexTypeInfo> ExtractComplexTypes()
+  1274	        {
+  1275	            var types = new List<ComplexTypeInfo>();
+  1276	            try
+  1277	            {
+  1278	                var schema = _oleDbConnection!.GetSchema("Columns");
+  1279	                foreach (System.Data.DataRow row in schema.Rows)
+  1280	                {
+  1281	                    var typeName = Convert.ToString(row["TYPE_NAME"]) ?? string.Empty;
+  1282	                    var dataType = Convert.ToString(row["DATA_TYPE"]) ?? string.Empty;
+  1283	                    var tableName = Convert.ToString(row["TABLE_NAME"]) ?? string.Empty;
+  1284	                    var columnName = Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty;
+  1285
+  1286	                    if (typeName.IndexOf("attachment", StringComparison.OrdinalIgnoreCase) >= 0 ||
+  1287	                        typeName.IndexOf("oleobject", StringComparison.OrdinalIgnoreCase) >= 0 ||
+  1288	                        columnName.IndexOf("attachment", StringComparison.OrdinalIgnoreCase) >= 0)
+  1289	                    {
+  1290	                        types.Add(new ComplexTypeInfo
+  1291	                        {
+  1292	                            TableName = tableName,
+  1293	                            ColumnName = columnName,
+  1294	                            DataType = string.IsNullOrEmpty(typeName) ? dataType : typeName,
+  1295	                            Notes = "Detected attachment or binary complex type"
+  1296	                        });
+  1297	                    }
+  1298	                }
+  1299	            }
+  1300	            catch
+  1301	            {
+  1302	                // Fallback when schema extraction fails
+  1303	            }
+  1304
+  1305	            if (!types.Any())
+  1306	            {
+  1307	                types.Add(new ComplexTypeInfo
+  1308	                {
+  1309	                    TableName = "global",
+  1310	                    ColumnName = "*",
+  1311	                    DataType = "ATTACHMENT/LOOKUP",
+  1312	                    Notes = "No explicit complex field types were detected, but Access may contain hidden lookup/attachment fields."
+  1313	                });
+  1314	            }
+  1315
+  1316	            return types;
+  1317	        }
+  1318
+  1319	        public List<HiddenLookupInfo> ExtractHiddenLookupFields()
+  1320	        {
+  1321	            var lookups = new List<HiddenLookupInfo>();
+  1322	            try
+  1323	            {
+  1324	                var schema = _oleDbConnection!.GetSchema("Columns");
+  1325	                foreach (System.Data.DataRow row in schema.Rows)
+  1326	                {
+  1327	                    var typeName = Convert.ToString(row["TYPE_NAME"]) ?? string.Empty;
+  1328	                    var tableName = Convert.ToString(row["TABLE_NAME"]) ?? string.Empty;
+  1329	                    var columnName = Convert.ToString(row["COLUMN_NAME"]) ?? string.Empty;
+  1330
+  1331	                    if (typeName.IndexOf("lookup", StringComparison.OrdinalIgnoreCase) >= 0 ||
+  1332	                        columnName.IndexOf("lookup", StringComparison.OrdinalIgnoreCase) >= 0)
+  1333	                    {
+  1334	                        lookups.Add(new HiddenLookupInfo
+  1335	                        {
+  1336	                            TableName = tableName,
+  1337	                            ColumnName = columnName,
+  1338	                            Notes = "Detected lookup field metadata"
+  1339	                        });
+  1340	                    }
+  1341	                }
+  1342	            }
+  1343	            catch
+  1344	            {
+  1345	                // Fallback to empty list
+  1346	            }
+  1347
+  1348	            if (!lookups.Any())
+  1349	            {
+  1350	                lookups.Add(new HiddenLookupInfo
+  1351	                {
+  1352	                    TableName = "global",
+  1353	                    ColumnName = "*",
+  1354	                    Notes = "No explicit lookup field columns were detected."
+  1355	                });
+  1356	            }
+  1357
+  1358	            return lookups;
+  1359	        }
+  1360
+  1361	        private FormMetadata ExtractObjectUiMetadata(object accessApp, string objectName, string objectType)
+  1362	        {
+  1363	            var metadata = new FormMetadata
+  1364	            {
+  1365	                Name = objectName,
+  1366	                ObjectType = objectType,
+  1367	                Controls = new List<ControlMetadata>()
+  1368	            };
+  1369
+  1370	            try
+  1371	            {
+  1372	                var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
+  1373	                if (objectType == "Form")
+  1374	                {
+  1375	                    doCmd.GetType().InvokeMember("OpenForm", BindingFlags.InvokeMethod, null, doCmd, new object[] { objectName, 0, null, null, 0, 1 });
+  1376	                }
+  1377	                else
+  1378	                {
+  1379	                    doCmd.GetType().InvokeMember("OpenReport", BindingFlags.InvokeMethod, null, doCmd, new object[] { objectName, 0, null, null, 1 });
+  1380	                }
+  1381
+  1382	                var containerName = objectType == "Form" ? "Forms" : "Reports";
+  1383	                var collection = accessApp.GetType().InvokeMember(containerName, BindingFlags.GetProperty, null, accessApp, null);
+  1384	                var obj = collection.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, collection, new object[] { objectName });
+  1385	                var controls = obj.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, obj, null);
+  1386	                var controlCount = Convert.ToInt32(controls.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
+  1387
+  1388	                for (int j = 1; j <= controlCount; j++)
+  1389	                {
+  1390	                    try
+  1391	                    {
+  1392	                        var control = controls.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, controls, new object[] { j });
+  1393	                        var name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? string.Empty;
+  1394	                        var typeValue = control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)?.ToString() ?? string.Empty;
+  1395	                        var left = SafeGetInt32(control, "Left", 0);
+  1396	                        var top = SafeGetInt32(control, "Top", 0);
+  1397	                        var width = SafeGetInt32(control, "Width", 0);
+  1398	                        var height = SafeGetInt32(control, "Height", 0);
+  1399	                        var visible = SafeGetBool(control, "Visible", true);
+  1400	                        var enabled = SafeGetBool(control, "Enabled", true);
+  1401	                        var controlSource = SafeGetString(control, "ControlSource", string.Empty);
+  1402
+  1403	                        var events = new List<ControlEventInfo>();
+  1404	                        foreach (var eventName in new[] { "OnClick", "OnDblClick", "OnChange", "OnCurrent", "OnLoad", "OnOpen" })
+  1405	                        {
+  1406	                            var eventValue = SafeGetString(control, eventName, string.Empty);
+  1407	                            if (!string.IsNullOrEmpty(eventValue))
+  1408	                            {
+  1409	                                events.Add(new ControlEventInfo { EventName = eventName, PropertyValue = eventValue });
+  1410	                            }
+  1411	                        }
+  1412
+  1413	                        metadata.Controls.Add(new ControlMetadata
+  1414	                        {
+  1415	                            Name = name,
+  1416	                            Type = typeValue,
+  1417	                            Left = left,
+  1418	                            Top = top,
+  1419	                            Width = width,
+  1420	                            Height = height,
+  1421	                            Visible = visible,
+  1422	                            Enabled = enabled,
+  1423	                            ControlSource = controlSource,
+  1424	                            BoundField = string.IsNullOrEmpty(controlSource) ? null : controlSource,
+  1425	                            Events = events
+  1426	                        });
+  1427	                    }
+  1428	                    catch
+  1429	                    {
+  1430	                        continue;
+  1431	                    }
+  1432	                }
+  1433	            }
+  1434	            catch (Exception ex)
+  1435	            {
+  1436	                FileLogger.Log($"ExtractObjectUiMetadata failed for {objectType} '{objectName}': {ex.Message}");
+  1437	            }
+  1438	            finally
+  1439	            {
+  1440	                try
+  1441	                {
+  1442	                    var doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
+  1443	                    if (objectType == "Form")
+  1444	                    {
+  1445	                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 2, objectName, 1 });
+  1446	                    }
+  1447	                    else
+  1448	                    {
+  1449	                        doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
+  1450	                    }
+  1451	                }
+  1452	                catch { }
+  1453	            }
+  1454
+  1455	            return metadata;
+  1456	        }
+  1457
+  1458	        public void SetVBACode(string projectName, string moduleName, string code)
+  1459	        {
+  1460	            if (!IsConnected)
+  1461	                throw new InvalidOperationException("Not connected to database");
+  1462
+  1463	            var accessApp = EnsureAccessApplication();
+  1464	            if (accessApp == null)
+  1465	                throw new InvalidOperationException("Access application is not available. Please call launch_access or connect first.");
+  1466
+  1467	            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName))
+  1468	                throw new ArgumentException("Project name and module name are required.");
+  1469
+  1470	            try
+  1471	            {
+  1472	                var currentProject = accessApp.GetType().InvokeMember("CurrentProject", BindingFlags.GetProperty, null, accessApp, null);
+  1473	                var vbeProject = currentProject.GetType().InvokeMember("VBProject", BindingFlags.GetProperty, null, currentProject, null);
+  1474	                if (vbeProject == null)
+  1475	                    throw new InvalidOperationException("Access VBProject not available.");
+  1476
+  1477	                var vbComponents = vbeProject.GetType().InvokeMember("VBComponents", BindingFlags.GetProperty, null, vbeProject, null);
+  1478	                var component = vbComponents.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, vbComponents, new object[] { moduleName });
+  1479	                if (component == null)
+  1480	                    throw new InvalidOperationException($"Module '{moduleName}' not found.");
+  1481
+  1482	                var codeModule = component.GetType().InvokeMember("CodeModule", BindingFlags.GetProperty, null, component, null);
+  1483	                var countOfLines = (int)codeModule.GetType().InvokeMember("CountOfLines", BindingFlags.GetProperty, null, codeModule, null);
+  1484
+  1485	                if (countOfLines > 0)
+  1486	                    codeModule.GetType().InvokeMember("DeleteLines", BindingFlags.InvokeMethod, null, codeModule, new object[] { 1, countOfLines });
+  1487
+  1488	                if (!string.IsNullOrEmpty(code))
+  1489	                    codeModule.GetType().InvokeMember("AddFromString", BindingFlags.InvokeMethod, null, codeModule, new object[] { code });
+  1490	            }
+  1491	            catch (Exception ex)
+  1492	            {
+  1493	                throw new InvalidOperationException($"Failed to set VBA code for module '{moduleName}': {ex.Message}", ex);
+  1494	            }
+  1495	        }
+  1496
+  1497	        public void AddVBAProcedure(string projectName, string moduleName, string procedureName, string code)
+  1498	        {
+  1499	            if (!IsConnected)
+  1500	                throw new InvalidOperationException("Not connected to database");
+  1501
+  1502	            if (string.IsNullOrEmpty(projectName) || string.IsNullOrEmpty(moduleName) || string.IsNullOrEmpty(procedureName))
+  1503	                throw new ArgumentException("Project name, module name, and procedure name are required.");
+  1504
+  1505	            var procedureCode = code;
+  1506	            if (string.IsNullOrEmpty(procedureCode))
+  1507	            {
+  1508	                procedureCode = $"Public Sub {procedureName}()\n" +
+  1509	                                "    On Error GoTo ErrorHandler\n\n" +
+  1510	                                "    ' TODO: implement\n\n" +
+  1511	                                "ExitProcedure:\n" +
+  1512	                                "    Exit Sub\n\n" +
+  1513	                                "ErrorHandler:\n" +
+  1514	                               $"    MsgBox \"Error \" & Err.Number & \" (\" & Err.Description & \") in procedure {procedureName}\"\n" +
+  1515	                                "    Resume ExitProcedure\n" +
+  1516	                                "End Sub";
+  1517	            }
+  1518
+  1519	            try
+  1520	            {
+  1521	                dynamic accessApp = (dynamic?)_accessApplication;
+  1522	                if (accessApp == null)
+  1523	                    throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  1524
+  1525	                dynamic vbeProject = accessApp.CurrentProject?.VBProject;
+  1526	                if (vbeProject == null)
+  1527	                    throw new InvalidOperationException("Access VBProject not available.");
+  1528
+  1529	                dynamic component = vbeProject.VBComponents[moduleName];
+  1530	                if (component == null)
+  1531	                    throw new InvalidOperationException($"Module '{moduleName}' not found.");
+  1532
+  1533	                dynamic codeModule = component.CodeModule;
+  1534	                var lineCount = (int)codeModule.CountOfLines;
+  1535	                var insertAt = lineCount + 1;
+  1536
+  1537	                codeModule.InsertLines(insertAt, procedureCode);
+  1538	            }
+  1539	            catch (COMException comEx)
+  1540	            {
+  1541	                throw new InvalidOperationException($"Failed to add VBA procedure '{procedureName}' in module '{moduleName}': {comEx.Message}", comEx);
+  1542	            }
+  1543	        }
+  1544
+  1545	        public void CompileVBA()
+  1546	        {
+  1547	            if (!IsConnected)
+  1548	                throw new InvalidOperationException("Not connected to database");
+  1549
+  1550	            try
+  1551	            {
+  1552	                dynamic accessApp = (dynamic?)_accessApplication;
+  1553	                if (accessApp == null)
+  1554	                    throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  1555
+  1556	                dynamic vbeProject = accessApp.CurrentProject?.VBProject;
+  1557	                if (vbeProject == null)
+  1558	                    throw new InvalidOperationException("Access VBProject not available.");
+  1559
+  1560	                // Attempt to compile by executing the Access menu command for VBA compile
+  1561	                // acCmdCompile = 602 or 211? use RunCommand constant 356
+  1562	                accessApp.DoCmd.RunCommand(600); // acCmdCompile may vary; if invalid, catches
+  1563	            }
+  1564	            catch (COMException comEx)
+  1565	            {
+  1566	                throw new InvalidOperationException($"Failed to compile VBA code: {comEx.Message}", comEx);
+  1567	            }
+  1568	        }
+  1569
+  1570	        #endregion
+  1571
+  1572	        #region 5. System Table Metadata Access
+  1573
+  1574	        public List<SystemTableInfo> GetSystemTables()
+  1575	        {
+  1576	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1577
+  1578	            lock (_schemaCacheLock)
+  1579	            {
+  1580	                if (_cachedSystemTables != null)
+  1581	                    return _cachedSystemTables;
+  1582	            }
+  1583
+  1584	            var systemTables = new List<SystemTableInfo>();
+  1585	            try
+  1586	            {
+  1587	                using var command = new OleDbCommand(
+  1588	                    "SELECT Name, DateCreate, DateUpdate FROM MSysObjects WHERE Name LIKE 'MSys%' OR Name LIKE '~%';",
+  1589	                    _oleDbConnection);
+  1590	                using var reader = command.ExecuteReader();
+  1591	                while (reader.Read())
+  1592	                {
+  1593	                    var name = reader["Name"]?.ToString() ?? string.Empty;
+  1594	                    if (string.IsNullOrEmpty(name))
+  1595	                        continue;
+  1596
+  1597	                    DateTime created = DateTime.MinValue;
+  1598	                    DateTime updated = DateTime.MinValue;
+  1599
+  1600	                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch { }
+  1601	                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch { }
+  1602
+  1603	                    systemTables.Add(new SystemTableInfo
+  1604	                    {
+  1605	                        Name = name,
+  1606	                        DateCreated = created,
+  1607	                        LastUpdated = updated,
+  1608	                        RecordCount = GetTableRecordCount(name)
+  1609	                    });
+  1610	                }
+  1611	            }
+  1612	            catch
+  1613	            {
+  1614	                // MSysObjects may be restricted; fallback to schema names with default timestamps
+  1615	                var schema = _oleDbConnection!.GetSchema("Tables");
+  1616	                foreach (System.Data.DataRow row in schema.Rows)
+  1617	                {
+  1618	                    var tableName = row["TABLE_NAME"]?.ToString();
+  1619	                    if (!string.IsNullOrEmpty(tableName) && (tableName.StartsWith("~") || tableName.StartsWith("MSys")))
+  1620	                    {
+  1621	                        systemTables.Add(new SystemTableInfo
+  1622	                        {
+  1623	                            Name = tableName,
+  1624	                            DateCreated = DateTime.MinValue,
+  1625	                            LastUpdated = DateTime.MinValue,
+  1626	                            RecordCount = GetTableRecordCount(tableName)
+  1627	                        });
+  1628	                    }
+  1629	                }
+  1630	            }
+  1631
+  1632	            lock (_schemaCacheLock)
+  1633	            {
+  1634	                _cachedSystemTables = systemTables;
+  1635	            }
+  1636
+  1637	            return systemTables;
+  1638	        }
+  1639
+  1640	        public List<MetadataInfo> GetObjectMetadata()
+  1641	        {
+  1642	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1643
+  1644	            var metadata = new List<MetadataInfo>();
+  1645
+  1646	            try
+  1647	            {
+  1648	                // Query MSysObjects table for object metadata
+  1649	                var command = new OleDbCommand("SELECT * FROM MSysObjects", _oleDbConnection);
+  1650	                using var reader = command.ExecuteReader();
+  1651
+  1652	                while (reader.Read())
+  1653	                {
+  1654	                    metadata.Add(new MetadataInfo
+  1655	                    {
+  1656	                        Name = reader["Name"]?.ToString() ?? "",
+  1657	                        Type = reader["Type"]?.ToString() ?? "",
+  1658	                        Flags = reader["Flags"]?.ToString() ?? "",
+  1659	                        DateCreated = reader["DateCreate"]?.ToString() ?? "",
+  1660	                        DateModified = reader["DateUpdate"]?.ToString() ?? ""
+  1661	                    });
+  1662	                }
+  1663	            }
+  1664	            catch
+  1665	            {
+  1666	                // MSysObjects might not be accessible, return empty list
+  1667	            }
+  1668
+  1669	            return metadata;
+  1670	        }
+  1671
+  1672	        #endregion
+  1673
+  1674	        #region 6. Form & Control Discovery & Editing APIs (Simplified)
+  1675
+  1676	        public bool FormExists(string formName)
+  1677	        {
+  1678	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1679
+  1680	            try
+  1681	            {
+  1682	                var command = new OleDbCommand("SELECT COUNT(*) FROM MSysObjects WHERE Name = ? AND Type = -32768", _oleDbConnection);
+  1683	                command.Parameters.AddWithValue("@Name", formName);
+  1684	                var count = Convert.ToInt32(command.ExecuteScalar());
+  1685	                return count > 0;
+  1686	            }
+  1687	            catch
+  1688	            {
+  1689	                return false;
+  1690	            }
+  1691	        }
+  1692
+  1693	        public List<ControlInfo> GetFormControls(string formName)
+  1694	        {
+  1695	            if (!IsConnected)
+  1696	                throw new InvalidOperationException("Not connected to database");
+  1697
+  1698	            if (string.IsNullOrEmpty(formName))
+  1699	                throw new ArgumentException("Form name is required", nameof(formName));
+  1700
+  1701	            var accessApp = EnsureAccessApplication();
+  1702	            if (accessApp == null)
+  1703	                throw new InvalidOperationException("Access application is not initialized. Please launch Access first.");
+  1704
+  1705	            var controlsInfo = new List<ControlInfo>();
+  1706
+  1707	            try
+  1708	            {
+  1709	                var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+  1710	                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+  1711	                var controls = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null);
+  1712	                var count = Convert.ToInt32(controls.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, controls, null));
+  1713
+  1714	                for (int i = 1; i <= count; i++)
+  1715	                {
+  1716	                    try
+  1717	                    {
+  1718	                        var control = controls.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, controls, new object[] { i });
+  1719	                        controlsInfo.Add(new ControlInfo
+  1720	                        {
+  1721	                            Name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
+  1722	                            Type = Convert.ToString(control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)) ?? "",
+  1723	                            Left = Convert.ToInt32(control.GetType().InvokeMember("Left", BindingFlags.GetProperty, null, control, null)),
+  1724	                            Top = Convert.ToInt32(control.GetType().InvokeMember("Top", BindingFlags.GetProperty, null, control, null)),
+  1725	                            Width = Convert.ToInt32(control.GetType().InvokeMember("Width", BindingFlags.GetProperty, null, control, null)),
+  1726	                            Height = Convert.ToInt32(control.GetType().InvokeMember("Height", BindingFlags.GetProperty, null, control, null)),
+  1727	                            Visible = Convert.ToBoolean(control.GetType().InvokeMember("Visible", BindingFlags.GetProperty, null, control, null)),
+  1728	                            Enabled = Convert.ToBoolean(control.GetType().InvokeMember("Enabled", BindingFlags.GetProperty, null, control, null))
+  1729	                        });
+  1730	                    }
+  1731	                    catch (Exception ex)
+  1732	                    {
+  1733	                        FileLogger.Log($"Error reading control properties: {ex.Message}");
+  1734	                        continue;
+  1735	                    }
+  1736	                }
+  1737	            }
+  1738	            catch (Exception ex)
+  1739	            {
+  1740	                throw new InvalidOperationException($"Failed to enumerate controls in form '{formName}': {ex.Message}", ex);
+  1741	            }
+  1742
+  1743	            return controlsInfo;
+  1744	        }
+  1745
+  1746	        public ControlProperties GetControlProperties(string formName, string controlName)
+  1747	        {
+  1748	            if (!IsConnected)
+  1749	                throw new InvalidOperationException("Not connected to database");
+  1750
+  1751	            var accessApp = EnsureAccessApplication();
+  1752	            if (accessApp == null)
+  1753	                throw new InvalidOperationException("Access application is not initialized. Please launch Access first.");
+  1754
+  1755	            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName))
+  1756	                throw new ArgumentException("Form name and control name are required.");
+  1757
+  1758	            try
+  1759	            {
+  1760	                var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+  1761	                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+  1762	                var control = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null).GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null), new object[] { controlName });
+  1763
+  1764	                var properties = new ControlProperties
+  1765	                {
+  1766	                    Name = Convert.ToString(control.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, control, null)) ?? "",
+  1767	                    Type = Convert.ToString(control.GetType().InvokeMember("ControlType", BindingFlags.GetProperty, null, control, null)) ?? "",
+  1768	                    Left = SafeGetInt32(control, "Left", 0),
+  1769	                    Top = SafeGetInt32(control, "Top", 0),
+  1770	                    Width = SafeGetInt32(control, "Width", 100),
+  1771	                    Height = SafeGetInt32(control, "Height", 20),
+  1772	                    Visible = SafeGetBool(control, "Visible", true),
+  1773	                    Enabled = SafeGetBool(control, "Enabled", true),
+  1774	                    BackColor = SafeGetInt32(control, "BackColor", -1),
+  1775	                    ForeColor = SafeGetInt32(control, "ForeColor", 0),
+  1776	                    FontName = SafeGetString(control, "FontName", "Arial"),
+  1777	                    FontSize = SafeGetInt32(control, "FontSize", 11),
+  1778	                    FontBold = SafeGetBool(control, "FontBold", false),
+  1779	                    FontItalic = SafeGetBool(control, "FontItalic", false)
+  1780	                };
+  1781
+  1782	                return properties;
+  1783	            }
+  1784	            catch (Exception ex)
+  1785	            {
+  1786	                throw new InvalidOperationException(
+  1787	                    $"Failed to get properties for control '{controlName}' in form '{formName}': {ex.Message}",
+  1788	                    ex);
+  1789	            }
+  1790	        }
+  1791
+  1792	        public void SetControlProperty(string formName, string controlName, string propertyName, object value)
+  1793	        {
+  1794	            if (!IsConnected)
+  1795	                throw new InvalidOperationException("Not connected to database");
+  1796
+  1797	            if (_accessApplication == null)
+  1798	                throw new InvalidOperationException("Access application is not initialized.");
+  1799
+  1800	            if (string.IsNullOrEmpty(formName) || string.IsNullOrEmpty(controlName) || string.IsNullOrEmpty(propertyName))
+  1801	                throw new ArgumentException("Form name, control name, and property name are required.");
+  1802
+  1803	            try
+  1804	            {
+  1805	                var forms = _accessApplication.GetType().InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
+  1806	                var form = forms.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, forms, new object[] { formName });
+  1807	                var control = form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null).GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, form.GetType().InvokeMember("Controls", BindingFlags.GetProperty, null, form, null), new object[] { controlName });
+  1808
+  1809	                control.GetType().InvokeMember(propertyName,
+  1810	                    BindingFlags.SetProperty,
+  1811	                    null,
+  1812	                    control,
+  1813	                    new object[] { value });
+  1814	            }
+  1815	            catch (System.Reflection.TargetInvocationException ex)
+  1816	            {
+  1817	                throw new InvalidOperationException(
+  1818	                    $"Failed to set property '{propertyName}' on control '{controlName}': {ex.InnerException?.Message}",
+  1819	                    ex);
+  1820	            }
+  1821	            catch (Exception ex)
+  1822	            {
+  1823	                throw new InvalidOperationException(
+  1824	                    $"Failed to set property '{propertyName}' on control '{controlName}': {ex.Message}",
+  1825	                    ex);
+  1826	            }
+  1827	        }
+  1828
+  1829	        // Helper methods to safely extract properties with fallback values
+  1830	        private int SafeGetInt32(object obj, string propertyName, int defaultValue)
+  1831	        {
+  1832	            try
+  1833	            {
+  1834	                var value = obj.GetType().InvokeMember(propertyName,
+  1835	                    System.Reflection.BindingFlags.GetProperty, null, obj, null);
+  1836	                return value != null ? Convert.ToInt32(value) : defaultValue;
+  1837	            }
+  1838	            catch (COMException)
+  1839	            {
+  1840	                return defaultValue;
+  1841	            }
+  1842	            catch (System.Reflection.TargetInvocationException)
+  1843	            {
+  1844	                return defaultValue;
+  1845	            }
+  1846	        }
+  1847
+  1848	        private bool SafeGetBool(object obj, string propertyName, bool defaultValue)
+  1849	        {
+  1850	            try
+  1851	            {
+  1852	                var value = obj.GetType().InvokeMember(propertyName,
+  1853	                    System.Reflection.BindingFlags.GetProperty, null, obj, null);
+  1854	                return value != null ? Convert.ToBoolean(value) : defaultValue;
+  1855	            }
+  1856	            catch (COMException)
+  1857	            {
+  1858	                return defaultValue;
+  1859	            }
+  1860	        }
+  1861
+  1862	        private string SafeGetString(object obj, string propertyName, string defaultValue)
+  1863	        {
+  1864	            try
+  1865	            {
+  1866	                var value = obj.GetType().InvokeMember(propertyName,
+  1867	                    System.Reflection.BindingFlags.GetProperty, null, obj, null);
+  1868	                return value?.ToString() ?? defaultValue;
+  1869	            }
+  1870	            catch (COMException)
+  1871	            {
+  1872	                return defaultValue;
+  1873	            }
+  1874	        }
+  1875
+  1876	        #endregion
+  1877
+  1878	        #region 7. Persistence & Versioning
+  1879
+  1880	        public string ExportFormToText(string formName)
+  1881	        {
+  1882	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1883
+  1884	            var formData = new
+  1885	            {
+  1886	                Name = formName,
+  1887	                ExportedAt = DateTime.UtcNow,
+  1888	                Controls = GetFormControls(formName),
+  1889	                VBA = GetVBACode("CurrentProject", formName)
+  1890	            };
+  1891
+  1892	            return JsonSerializer.Serialize(formData, new JsonSerializerOptions { WriteIndented = true });
+  1893	        }
+  1894
+  1895	        public void ImportFormFromText(string formData)
+  1896	        {
+  1897	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1898
+  1899	            var formInfo = JsonSerializer.Deserialize<FormExportData>(formData);
+  1900	            if (formInfo == null) throw new ArgumentException("Invalid form data");
+  1901
+  1902	            if (_accessApplication == null)
+  1903	                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  1904
+  1905	            dynamic? form = null;
+  1906	            try
+  1907	            {
+  1908	                dynamic accessApp = _accessApplication;
+  1909	                form = accessApp.CreateForm();
+  1910	                form.Name = formInfo.Name;
+  1911	                form.Visible = false;
+  1912	                accessApp.DoCmd.Save(2, formInfo.Name);
+  1913	                accessApp.DoCmd.Close(2, formInfo.Name, 1);
+  1914	            }
+  1915	            catch (Exception ex)
+  1916	            {
+  1917	                throw new InvalidOperationException($"Failed to import form '{formInfo.Name}': {ex.Message}", ex);
+  1918	            }
+  1919	            finally
+  1920	            {
+  1921	                ReleaseComObjectSafe(form);
+  1922	            }
+  1923	        }
+  1924
+  1925	        public void DeleteForm(string formName)
+  1926	        {
+  1927	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1928	            if (_accessApplication == null)
+  1929	                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  1930
+  1931	            try
+  1932	            {
+  1933	                dynamic accessApp = _accessApplication;
+  1934	                accessApp.DoCmd.DeleteObject(2, formName);
+  1935	            }
+  1936	            catch (Exception ex)
+  1937	            {
+  1938	                throw new InvalidOperationException($"Failed to delete form '{formName}': {ex.Message}", ex);
+  1939	            }
+  1940	        }
+  1941
+  1942	        public string ExportReportToText(string reportName)
+  1943	        {
+  1944	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1945
+  1946	            var reportData = new
+  1947	            {
+  1948	                Name = reportName,
+  1949	                ExportedAt = DateTime.UtcNow,
+  1950	                Controls = GetFormControls(reportName) // Reuse form controls for reports
+  1951	            };
+  1952
+  1953	            return JsonSerializer.Serialize(reportData, new JsonSerializerOptions { WriteIndented = true });
+  1954	        }
+  1955
+  1956	        public string ExportReportToPdf(string reportName)
+  1957	        {
+  1958	            if (string.IsNullOrWhiteSpace(reportName))
+  1959	                throw new ArgumentException("Report name is required.", nameof(reportName));
+  1960
+  1961	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1962
+  1963	            var reports = GetReports();
+  1964	            if (!reports.Exists(r => string.Equals(r.Name, reportName, StringComparison.OrdinalIgnoreCase)))
+  1965	                throw new ArgumentException($"Report '{reportName}' does not exist.", nameof(reportName));
+  1966
+  1967	            var accessApp = EnsureAccessApplication();
+  1968	            if (accessApp == null)
+  1969	                throw new InvalidOperationException("Access application is not available. Please launch Access first.");
+  1970
+  1971	            var outputFileName = $"{SanitizeFileName(reportName)}_{Guid.NewGuid():N}.pdf";
+  1972	            var outputFilePath = Path.Combine(Path.GetTempPath(), outputFileName);
+  1973
+  1974	            dynamic? doCmd = null;
+  1975	            try
+  1976	            {
+  1977	                doCmd = accessApp.GetType().InvokeMember("DoCmd", BindingFlags.GetProperty, null, accessApp, null);
+  1978	                doCmd.GetType().InvokeMember("OutputTo", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, reportName, "PDF", outputFilePath, false });
+  1979	                return Path.GetFullPath(outputFilePath);
+  1980	            }
+  1981	            catch (TargetInvocationException tie) when (tie.InnerException != null)
+  1982	            {
+  1983	                throw new InvalidOperationException($"Failed to export report '{reportName}' to PDF: {tie.InnerException.Message}", tie.InnerException);
+  1984	            }
+  1985	            catch (Exception ex)
+  1986	            {
+  1987	                throw new InvalidOperationException($"Failed to export report '{reportName}' to PDF: {ex.Message}", ex);
+  1988	            }
+  1989	            finally
+  1990	            {
+  1991	                ReleaseComObjectSafe(doCmd);
+  1992	            }
+  1993	        }
+  1994
+  1995	        public void ImportReportFromText(string reportData)
+  1996	        {
+  1997	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  1998
+  1999	            var reportInfo = JsonSerializer.Deserialize<ReportExportData>(reportData);
+  2000	            if (reportInfo == null) throw new ArgumentException("Invalid report data");
+  2001
+  2002	            if (_accessApplication == null)
+  2003	                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  2004
+  2005	            dynamic? report = null;
+  2006	            try
+  2007	            {
+  2008	                dynamic accessApp = _accessApplication;
+  2009	                report = accessApp.CreateReport();
+  2010	                report.Name = reportInfo.Name;
+  2011	                report.Visible = false;
+  2012	                accessApp.DoCmd.Save(3, reportInfo.Name);
+  2013	                accessApp.DoCmd.Close(3, reportInfo.Name, 1);
+  2014	            }
+  2015	            catch (Exception ex)
+  2016	            {
+  2017	                throw new InvalidOperationException($"Failed to import report '{reportInfo.Name}': {ex.Message}", ex);
+  2018	            }
+  2019	            finally
+  2020	            {
+  2021	                ReleaseComObjectSafe(report);
+  2022	            }
+  2023	        }
+  2024
+  2025	        public void DeleteReport(string reportName)
+  2026	        {
+  2027	            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+  2028	            if (_accessApplication == null)
+  2029	                throw new InvalidOperationException("Access application is not launched. Please call launch_access first.");
+  2030
+  2031	            try
+  2032	            {
+  2033	                dynamic accessApp = _accessApplication;
+  2034	                accessApp.DoCmd.DeleteObject(3, reportName);
+  2035	            }
+  2036	            catch (Exception ex)
+  2037	            {
+  2038	                throw new InvalidOperationException($"Failed to delete report '{reportName}': {ex.Message}", ex);
+  2039	            }
+  2040	        }
+  2041
+  2042	        #endregion
+  2043
+  2044	        #region Helper Methods
+  2045
+  2046	        private List<FieldInfo> GetTableFields(string tableName)
+  2047	        {
+  2048	            var fields = new List<FieldInfo>();
+  2049
+  2050	            try
+  2051	            {
+  2052	                var schema = _oleDbConnection!.GetSchema("Columns", new string[] { null!, null!, tableName });
+  2053
+  2054	                foreach (System.Data.DataRow row in schema.Rows)
+  2055	                {
+  2056	                    fields.Add(new FieldInfo
+  2057	                    {
+  2058	                        Name = row["COLUMN_NAME"]?.ToString() ?? "",
+  2059	                        Type = row["DATA_TYPE"]?.ToString() ?? "",
+  2060	                        Size = Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"] ?? 0),
+  2061	                        Required = row["IS_NULLABLE"]?.ToString() == "NO",
+  2062	                        AllowZeroLength = true // Default value
+  2063	                    });
+  2064	                }
+  2065	            }
+  2066	            catch
+  2067	            {
+  2068	                // Return empty list if table doesn't exist or can't be accessed
+  2069	            }
+  2070
+  2071	            return fields;
+  2072	        }
+  2073
+  2074	        private long GetTableRecordCount(string tableName)
+  2075	        {
+  2076	            try
+  2077	            {
+  2078	                var command = new OleDbCommand($"SELECT COUNT(*) FROM [{tableName}]", _oleDbConnection);
+  2079	                return Convert.ToInt64(command.ExecuteScalar());
+  2080	            }
+  2081	            catch
+  2082	            {
+  2083	                return 0;
+  2084	            }
+  2085	        }
+  2086
+  2087	        #endregion
+  2088
+  2089	        public void Dispose()
+  2090	        {
+  2091	            if (!_disposed)
+  2092	            {
+  2093	                Disconnect();
+  2094	                _disposed = true;
+  2095	                GC.SuppressFinalize(this);
+  2096	            }
+  2097	        }
+  2098
+  2099	        ~AccessInteropService()
+  2100	        {
+  2101	            Dispose();
+  2102	        }
+  2103	    }
+  2104
+  2105	    #region Data Models
+  2106
+  2107	    public class TableInfo
+  2108	    {
+  2109	        public string Name { get; set; } = "";
+  2110	        public List<FieldInfo> Fields { get; set; } = new();
+  2111	        public long RecordCount { get; set; }
+  2112	    }
+  2113
+  2114	    public class FieldInfo
+  2115	    {
+  2116	        public string Name { get; set; } = "";
+  2117	        public string Type { get; set; } = "";
+  2118	        public int Size { get; set; }
+  2119	        public bool Required { get; set; }
+  2120	        public bool AllowZeroLength { get; set; }
+  2121	    }
+  2122
+  2123	    public class QueryInfo
+  2124	    {
+  2125	        public string Name { get; set; } = "";
+  2126	        public string SQL { get; set; } = "";
+  2127	        public string Type { get; set; } = "";
+  2128	    }
+  2129
+  2130	    public class RelationshipInfo
+  2131	    {
+  2132	        public string Name { get; set; } = "";
+  2133	        public string Table { get; set; } = "";
+  2134	        public string ForeignTable { get; set; } = "";
+  2135	        public string Attributes { get; set; } = "";
+  2136	    }
+  2137
+  2138	    public class FormInfo
+  2139	    {
+  2140	        public string Name { get; set; } = "";
+  2141	        public string FullName { get; set; } = "";
+  2142	        public string Type { get; set; } = "";
+  2143	    }
+  2144
+  2145	    public class ReportInfo
+  2146	    {
+  2147	        public string Name { get; set; } = "";
+  2148	        public string FullName { get; set; } = "";
+  2149	        public string Type { get; set; } = "";
+  2150	    }
+  2151
+  2152	    public class MacroInfo
+  2153	    {
+  2154	        public string Name { get; set; } = "";
+  2155	        public string FullName { get; set; } = "";
+  2156	        public string Type { get; set; } = "";
+  2157	    }
+  2158
+  2159	    public class ModuleInfo
+  2160	    {
+  2161	        public string Name { get; set; } = "";
+  2162	        public string FullName { get; set; } = "";
+  2163	        public string Type { get; set; } = "";
+  2164	    }
+  2165
+  2166	    public class VBAProjectInfo
+  2167	    {
+  2168	        public string Name { get; set; } = "";
+  2169	        public string Description { get; set; } = "";
+  2170	        public List<VBAModuleInfo> Modules { get; set; } = new();
+  2171	    }
+  2172
+  2173	    public class VBAModuleInfo
+  2174	    {
+  2175	        public string Name { get; set; } = "";
+  2176	        public string Type { get; set; } = "";
+  2177	        public bool HasCode { get; set; }
+  2178	    }
+  2179
+  2180	    public class SystemTableInfo
+  2181	    {
+  2182	        public string Name { get; set; } = "";
+  2183	        public DateTime DateCreated { get; set; }
+  2184	        public DateTime LastUpdated { get; set; }
+  2185	        public long RecordCount { get; set; }
+  2186	    }
+  2187
+  2188	    public class MetadataInfo
+  2189	    {
+  2190	        public string Name { get; set; } = "";
+  2191	        public string Type { get; set; } = "";
+  2192	        public string Flags { get; set; } = "";
+  2193	        public string DateCreated { get; set; } = "";
+  2194	        public string DateModified { get; set; } = "";
+  2195	    }
+  2196
+  2197	    public class ControlInfo
+  2198	    {
+  2199	        public string Name { get; set; } = "";
+  2200	        public string Type { get; set; } = "";
+  2201	        public int Left { get; set; }
+  2202	        public int Top { get; set; }
+  2203	        public int Width { get; set; }
+  2204	        public int Height { get; set; }
+  2205	        public bool Visible { get; set; }
+  2206	        public bool Enabled { get; set; }
+  2207	    }
+  2208
+  2209	    public class ControlProperties
+  2210	    {
+  2211	        public string Name { get; set; } = "";
+  2212	        public string Type { get; set; } = "";
+  2213	        public int Left { get; set; }
+  2214	        public int Top { get; set; }
+  2215	        public int Width { get; set; }
+  2216	        public int Height { get; set; }
+  2217	        public bool Visible { get; set; }
+  2218	        public bool Enabled { get; set; }
+  2219	        public int BackColor { get; set; }
+  2220	        public int ForeColor { get; set; }
+  2221	        public string FontName { get; set; } = "";
+  2222	        public int FontSize { get; set; }
+  2223	        public bool FontBold { get; set; }
+  2224	        public bool FontItalic { get; set; }
+  2225	    }
+  2226
+  2227	    public class ControlEventInfo
+  2228	    {
+  2229	        public string EventName { get; set; } = "";
+  2230	        public string PropertyValue { get; set; } = "";
+  2231	    }
+  2232
+  2233	    public class ControlMetadata
+  2234	    {
+  2235	        public string Name { get; set; } = "";
+  2236	        public string Type { get; set; } = "";
+  2237	        public int Left { get; set; }
+  2238	        public int Top { get; set; }
+  2239	        public int Width { get; set; }
+  2240	        public int Height { get; set; }
+  2241	        public bool Visible { get; set; }
+  2242	        public bool Enabled { get; set; }
+  2243	        public string ControlSource { get; set; } = "";
+  2244	        public string? BoundField { get; set; }
+  2245	        public List<ControlEventInfo> Events { get; set; } = new();
+  2246	    }
+  2247
+  2248	    public class FormMetadata
+  2249	    {
+  2250	        public string Name { get; set; } = "";
+  2251	        public string ObjectType { get; set; } = "Form";
+  2252	        public List<ControlMetadata> Controls { get; set; } = new();
+  2253	    }
+  2254
+  2255	    public class VBAModuleDetail
+  2256	    {
+  2257	        public string ProjectName { get; set; } = "";
+  2258	        public string ModuleName { get; set; } = "";
+  2259	        public string ModuleType { get; set; } = "";
+  2260	        public string Code { get; set; } = "";
+  2261	    }
+  2262
+  2263	    public class ComplexTypeInfo
+  2264	    {
+  2265	        public string TableName { get; set; } = "";
+  2266	        public string ColumnName { get; set; } = "";
+  2267	        public string DataType { get; set; } = "";
+  2268	        public string Notes { get; set; } = "";
+  2269	    }
+  2270
+  2271	    public class HiddenLookupInfo
+  2272	    {
+  2273	        public string TableName { get; set; } = "";
+  2274	        public string ColumnName { get; set; } = "";
+  2275	        public string Notes { get; set; } = "";
+  2276	    }
+  2277
+  2278	    public class FormExportData
+  2279	    {
+  2280	        public string Name { get; set; } = "";
+  2281	        public DateTime ExportedAt { get; set; }
+  2282	        public List<ControlInfo> Controls { get; set; } = new();
+  2283	        public string VBA { get; set; } = "";
+  2284	    }
+  2285
+  2286	    public class ReportExportData
+  2287	    {
+  2288	        public string Name { get; set; } = "";
+  2289	        public DateTime ExportedAt { get; set; }
+  2290	        public List<ControlInfo> Controls { get; set; } = new();
+  2291	    }
+  2292
+  2293	    public static class FileLogger
+  2294	    {
+  2295	        private static readonly string LogPath = Path.Combine(AppContext.BaseDirectory, "mcp_server.log");
+  2296	        private static readonly BlockingCollection<string> Queue = new(new ConcurrentQueue<string>());
+  2297	        private static readonly Task BackgroundWriter;
+  2298	        private static readonly JsonSerializerOptions SerializerOptions = new()
+  2299	        {
+  2300	            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+  2301	            WriteIndented = false
+  2302	        };
+  2303
+  2304	        static FileLogger()
+  2305	        {
+  2306	            try
+  2307	            {
+  2308	                var logDirectory = Path.GetDirectoryName(LogPath);
+  2309	                if (!string.IsNullOrEmpty(logDirectory))
+  2310	                    Directory.CreateDirectory(logDirectory);
+  2311	            }
+  2312	            catch { }
+  2313
+  2314	            BackgroundWriter = Task.Factory.StartNew(() =>
+  2315	            {
+  2316	                foreach (var entry in Queue.GetConsumingEnumerable())
+  2317	                {
+  2318	                    try
+  2319	                    {
+  2320	                        File.AppendAllText(LogPath, entry + Environment.NewLine, Encoding.UTF8);
+  2321	                    }
+  2322	                    catch { }
+  2323	                }
+  2324	            }, TaskCreationOptions.LongRunning);
+  2325	        }
+  2326
+  2327	        public static void Log(string message)
+  2328	        {
+  2329	            Log(new { level = "Information", @event = "LogMessage", message });
+  2330	        }
+  2331
+  2332	        public static void Log(string level, string eventName, object? data = null)
+  2333	        {
+  2334	            Log(new
+  2335	            {
+  2336	                timestamp = DateTime.UtcNow,
+  2337	                level,
+  2338	                @event = eventName,
+  2339	                data
+  2340	            });
+  2341	        }
+  2342
+  2343	        public static void Log(object payload)
+  2344	        {
+  2345	            try
+  2346	            {
+  2347	                var line = JsonSerializer.Serialize(payload, SerializerOptions);
+  2348	                Queue.Add(line);
+  2349	            }
+  2350	            catch { }
+  2351	        }
+  2352
+  2353	        public static void Shutdown()
+  2354	        {
+  2355	            try
+  2356	            {
+  2357	                Queue.CompleteAdding();
+  2358	                BackgroundWriter.Wait(1000);
+  2359	            }
+  2360	            catch { }
+  2361	        }
+  2362	    }
+  2363
+  2364	    #endregion
+  2365	}

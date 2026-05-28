@@ -110,5 +110,44 @@ namespace MS.Access.MCP.Tests
 
             Assert.Contains("Database file not found", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
+
+        [Fact]
+        public void AccessInteropService_ConnectNullOrEmptyPath_ThrowsArgumentNullException()
+        {
+            using var accessService = new AccessInteropService();
+
+            Assert.Throws<ArgumentNullException>(() => accessService.Connect(null!));
+            Assert.Throws<ArgumentNullException>(() => accessService.Connect(""));
+        }
+
+        [Fact]
+        public void AccessInteropService_CreateTable_InvalidTableName_ThrowsArgumentException()
+        {
+            using var accessService = new AccessInteropService();
+            // Should throw before checking IsConnected
+            Assert.Throws<ArgumentException>(() => accessService.CreateTable("Invalid;Name", new System.Collections.Generic.List<FieldInfo>()));
+        }
+
+        [Fact]
+        public void AccessInteropService_DeleteTable_InvalidTableName_ThrowsArgumentException()
+        {
+            using var accessService = new AccessInteropService();
+            // Should throw before checking IsConnected
+            Assert.Throws<ArgumentException>(() => accessService.DeleteTable("Invalid;Name"));
+        }
+
+        [Fact]
+        public void ProcessRpcMessage_HealthCheck_ResultHasSuccessProperty()
+        {
+            using var accessService = new AccessInteropService();
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"health_check\",\"arguments\":{}}}";
+            var response = Program.ProcessRpcMessage(accessService, request);
+
+            Assert.NotNull(response);
+            Assert.NotNull(response.Result);
+
+            var element = JsonSerializer.SerializeToElement(response.Result);
+            Assert.True(element.GetProperty("success").GetBoolean());
+        }
     }
 }

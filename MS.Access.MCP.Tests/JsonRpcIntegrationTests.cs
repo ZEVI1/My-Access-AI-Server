@@ -137,10 +137,10 @@ namespace MS.Access.MCP.Tests
         }
 
         [Fact]
-        public void ProcessRpcMessage_Ping_ResultHasSuccessProperty()
+        public void ProcessRpcMessage_HealthCheck_ResultHasSuccessProperty()
         {
             using var accessService = new AccessInteropService();
-            var request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}";
+            var request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"health_check\",\"arguments\":{}}}";
             var response = Program.ProcessRpcMessage(accessService, request);
 
             Assert.NotNull(response);

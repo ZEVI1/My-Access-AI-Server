@@ -31,8 +31,13 @@ namespace MS.Access.MCP.Interop
 
         public void Connect(string databasePath)
         {
+            if (string.IsNullOrEmpty(databasePath))
+                throw new ArgumentNullException(nameof(databasePath), "Database path cannot be null or empty");
+
             if (!File.Exists(databasePath))
                 throw new FileNotFoundException($"Database file not found: {databasePath}");
+
+            Disconnect();
 
             _currentDatabasePath = databasePath;
             
@@ -123,16 +128,16 @@ namespace MS.Access.MCP.Interop
                             var forms = accessType.InvokeMember("Forms", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(forms);
                         }
-                        catch { }
+                        catch { /* Exception ignored to prevent host crashes */ }
 
                         try
                         {
                             var reports = accessType.InvokeMember("Reports", BindingFlags.GetProperty, null, _accessApplication, null);
                             ReleaseComObjectSafe(reports);
                         }
-                        catch { }
+                        catch { /* Exception ignored to prevent host crashes */ }
 
-                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
                     }
                     catch (Exception ex)
                     {
@@ -191,7 +196,7 @@ namespace MS.Access.MCP.Interop
             {
                 while (Marshal.ReleaseComObject(comObject) > 0) { }
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
         }
 
         private dynamic? EnsureAccessApplication()
@@ -220,7 +225,7 @@ namespace MS.Access.MCP.Interop
 
         #region 2. Data Access Object Models
 
-        public List<TableInfo> GetTables()
+        public List<TableInfo> GetTables(bool includeRecordCount = false)
         {
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
@@ -232,20 +237,46 @@ namespace MS.Access.MCP.Interop
 
             var tables = new List<TableInfo>();
             
+            // Get all columns in a single batch to avoid N+1 queries
+            var columnsSchema = _oleDbConnection!.GetSchema("Columns");
+            var tableColumns = new Dictionary<string, List<FieldInfo>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (System.Data.DataRow row in columnsSchema.Rows)
+            {
+                var tblName = row["TABLE_NAME"]?.ToString();
+                if (string.IsNullOrEmpty(tblName)) continue;
+
+                if (!tableColumns.TryGetValue(tblName, out var fieldsList))
+                {
+                    fieldsList = new List<FieldInfo>();
+                    tableColumns[tblName] = fieldsList;
+                }
+
+                fieldsList.Add(new FieldInfo
+                {
+                    Name = row["COLUMN_NAME"] != DBNull.Value ? row["COLUMN_NAME"].ToString() ?? "" : "",
+                    Type = row["DATA_TYPE"] != DBNull.Value ? row["DATA_TYPE"].ToString() ?? "" : "",
+                    Size = row["CHARACTER_MAXIMUM_LENGTH"] != DBNull.Value ? Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"]) : 0,
+                    Required = row["IS_NULLABLE"] != DBNull.Value && row["IS_NULLABLE"].ToString() == "NO",
+                    AllowZeroLength = true
+                });
+            }
+
             // Use OleDb to get table information
             var schema = _oleDbConnection!.GetSchema("Tables");
             
             foreach (System.Data.DataRow row in schema.Rows)
             {
-                var tableName = row["TABLE_NAME"].ToString();
+                var tableName = row["TABLE_NAME"] != DBNull.Value ? row["TABLE_NAME"].ToString() : null;
                 if (!string.IsNullOrEmpty(tableName) && !tableName.StartsWith("~"))
                 {
-                    var fields = GetTableFields(tableName);
+                    var fields = tableColumns.TryGetValue(tableName, out var f) ? f : new List<FieldInfo>();
+
                     tables.Add(new TableInfo
                     {
                         Name = tableName,
                         Fields = fields,
-                        RecordCount = GetTableRecordCount(tableName)
+                        RecordCount = includeRecordCount ? GetTableRecordCount(tableName) : null
                     });
                 }
             }
@@ -293,7 +324,7 @@ namespace MS.Access.MCP.Interop
                         }
                     }
                 }
-                catch { }
+                catch { /* Exception ignored to prevent host crashes */ }
                 finally
                 {
                     ReleaseComObjectSafe(queryDef);
@@ -747,11 +778,19 @@ namespace MS.Access.MCP.Interop
 
         public void CreateTable(string tableName, List<FieldInfo> fields)
         {
+            if (string.IsNullOrEmpty(tableName)) throw new ArgumentException("Table name is required", nameof(tableName));
+            if (!IsValidObjectName(tableName)) throw new ArgumentException("Invalid table name", nameof(tableName));
+
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             var fieldDefinitions = new List<string>();
             foreach (var field in fields)
             {
+                if (!IsValidObjectName(field.Name)) throw new ArgumentException($"Invalid field name: {field.Name}");
+                // Basic check for type name. Type name is usually a reserved word, no punctuation allowed.
+                if (field.Type.IndexOfAny(new[] { '[', ']', ';', '\'', '"', ')' }) >= 0)
+                    throw new ArgumentException($"Invalid field type: {field.Type}");
+
                 var fieldDef = $"[{field.Name}] {field.Type}";
                 if (field.Size > 0 && field.Type.ToLower() == "text")
                     fieldDef += $"({field.Size})";
@@ -767,7 +806,11 @@ namespace MS.Access.MCP.Interop
 
         public void DeleteTable(string tableName)
         {
+            if (string.IsNullOrEmpty(tableName)) throw new ArgumentException("Table name is required", nameof(tableName));
+            if (!IsValidObjectName(tableName)) throw new ArgumentException("Invalid table name", nameof(tableName));
+
             if (!IsConnected) throw new InvalidOperationException("Not connected to database");
+
             var command = new OleDbCommand($"DROP TABLE [{tableName}]", _oleDbConnection);
             command.ExecuteNonQuery();
         }
@@ -797,25 +840,25 @@ namespace MS.Access.MCP.Interop
             {
                 accessType.InvokeMember("Visible", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
 
             try
             {
                 accessType.InvokeMember("AutomationSecurity", BindingFlags.SetProperty, null, _accessApplication, new object[] { 3 });
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
 
             try
             {
                 accessType.InvokeMember("UserControl", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
 
             try
             {
                 accessType.InvokeMember("DisplayAlerts", BindingFlags.SetProperty, null, _accessApplication, new object[] { false });
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
 
             if (!string.IsNullOrEmpty(_currentDatabasePath))
             {
@@ -843,7 +886,7 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var accessType = _accessApplication.GetType();
-                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
             }
             catch (Exception ex)
             {
@@ -873,15 +916,15 @@ namespace MS.Access.MCP.Interop
                 {
                     forms.Add(new FormInfo
                     {
-                        Name = reader["Name"]?.ToString() ?? "",
-                        FullName = reader["Name"]?.ToString() ?? "",
+                        Name = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
+                        FullName = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
                         Type = "Form"
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetForms failed accessing MSysObjects: {ex.Message}");
             }
 
             return forms;
@@ -903,15 +946,15 @@ namespace MS.Access.MCP.Interop
                 {
                     reports.Add(new ReportInfo
                     {
-                        Name = reader["Name"]?.ToString() ?? "",
-                        FullName = reader["Name"]?.ToString() ?? "",
+                        Name = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
+                        FullName = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
                         Type = "Report"
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetReports failed accessing MSysObjects: {ex.Message}");
             }
 
             return reports;
@@ -933,15 +976,15 @@ namespace MS.Access.MCP.Interop
                 {
                     macros.Add(new MacroInfo
                     {
-                        Name = reader["Name"]?.ToString() ?? "",
-                        FullName = reader["Name"]?.ToString() ?? "",
+                        Name = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
+                        FullName = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
                         Type = "Macro"
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetMacros failed accessing MSysObjects: {ex.Message}");
             }
 
             return macros;
@@ -963,15 +1006,15 @@ namespace MS.Access.MCP.Interop
                 {
                     modules.Add(new ModuleInfo
                     {
-                        Name = reader["Name"]?.ToString() ?? "",
-                        FullName = reader["Name"]?.ToString() ?? "",
+                        Name = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
+                        FullName = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
                         Type = "Module"
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetModules failed accessing MSysObjects: {ex.Message}");
             }
 
             return modules;
@@ -1059,7 +1102,7 @@ namespace MS.Access.MCP.Interop
             {
                 if (form != null)
                 {
-                    try { Marshal.ReleaseComObject(form); } catch { }
+                    try { Marshal.ReleaseComObject(form); } catch { /* Exception ignored to prevent host crashes */ }
                 }
             }
         }
@@ -1085,7 +1128,7 @@ namespace MS.Access.MCP.Interop
                 {
                     modules.Add(new VBAModuleInfo
                     {
-                        Name = reader["Name"]?.ToString() ?? "",
+                        Name = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
                         Type = "Module",
                         HasCode = true
                     });
@@ -1098,9 +1141,9 @@ namespace MS.Access.MCP.Interop
                     Modules = modules
                 });
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetVBAProjects failed accessing MSysObjects: {ex.Message}");
             }
 
             return projects;
@@ -1449,7 +1492,7 @@ namespace MS.Access.MCP.Interop
                         doCmd.GetType().InvokeMember("Close", BindingFlags.InvokeMethod, null, doCmd, new object[] { 3, objectName, 1 });
                     }
                 }
-                catch { }
+                catch { /* Exception ignored to prevent host crashes */ }
             }
 
             return metadata;
@@ -1597,8 +1640,8 @@ namespace MS.Access.MCP.Interop
                     DateTime created = DateTime.MinValue;
                     DateTime updated = DateTime.MinValue;
 
-                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch { }
-                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch { }
+                    try { created = reader["DateCreate"] != DBNull.Value ? Convert.ToDateTime(reader["DateCreate"]) : DateTime.MinValue; } catch { /* Exception ignored to prevent host crashes */ }
+                    try { updated = reader["DateUpdate"] != DBNull.Value ? Convert.ToDateTime(reader["DateUpdate"]) : DateTime.MinValue; } catch { /* Exception ignored to prevent host crashes */ }
 
                     systemTables.Add(new SystemTableInfo
                     {
@@ -1653,17 +1696,17 @@ namespace MS.Access.MCP.Interop
                 {
                     metadata.Add(new MetadataInfo
                     {
-                        Name = reader["Name"]?.ToString() ?? "",
-                        Type = reader["Type"]?.ToString() ?? "",
-                        Flags = reader["Flags"]?.ToString() ?? "",
-                        DateCreated = reader["DateCreate"]?.ToString() ?? "",
-                        DateModified = reader["DateUpdate"]?.ToString() ?? ""
+                        Name = reader["Name"] != DBNull.Value ? reader["Name"]?.ToString() ?? "" : "",
+                        Type = reader["Type"] != DBNull.Value ? reader["Type"]?.ToString() ?? "" : "",
+                        Flags = reader["Flags"] != DBNull.Value ? reader["Flags"]?.ToString() ?? "" : "",
+                        DateCreated = reader["DateCreate"] != DBNull.Value ? reader["DateCreate"]?.ToString() ?? "" : "",
+                        DateModified = reader["DateUpdate"] != DBNull.Value ? reader["DateUpdate"]?.ToString() ?? "" : ""
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible, return empty list
+                FileLogger.Log($"GetObjectMetadata failed accessing MSysObjects: {ex.Message}");
             }
 
             return metadata;
@@ -2073,6 +2116,9 @@ namespace MS.Access.MCP.Interop
 
         private long GetTableRecordCount(string tableName)
         {
+            if (!IsValidObjectName(tableName))
+                return 0;
+
             try
             {
                 var command = new OleDbCommand($"SELECT COUNT(*) FROM [{tableName}]", _oleDbConnection);
@@ -2108,7 +2154,7 @@ namespace MS.Access.MCP.Interop
     {
         public string Name { get; set; } = "";
         public List<FieldInfo> Fields { get; set; } = new();
-        public long RecordCount { get; set; }
+        public long? RecordCount { get; set; }
     }
 
     public class FieldInfo
@@ -2309,7 +2355,7 @@ namespace MS.Access.MCP.Interop
                 if (!string.IsNullOrEmpty(logDirectory))
                     Directory.CreateDirectory(logDirectory);
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
 
             BackgroundWriter = Task.Factory.StartNew(() =>
             {
@@ -2319,7 +2365,7 @@ namespace MS.Access.MCP.Interop
                     {
                         File.AppendAllText(LogPath, entry + Environment.NewLine, Encoding.UTF8);
                     }
-                    catch { }
+                    catch { /* Exception ignored to prevent host crashes */ }
                 }
             }, TaskCreationOptions.LongRunning);
         }
@@ -2347,7 +2393,7 @@ namespace MS.Access.MCP.Interop
                 var line = JsonSerializer.Serialize(payload, SerializerOptions);
                 Queue.Add(line);
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
         }
 
         public static void Shutdown()
@@ -2357,7 +2403,7 @@ namespace MS.Access.MCP.Interop
                 Queue.CompleteAdding();
                 BackgroundWriter.Wait(1000);
             }
-            catch { }
+            catch { /* Exception ignored to prevent host crashes */ }
         }
     }
 

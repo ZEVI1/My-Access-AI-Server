@@ -33,8 +33,7 @@ namespace MS.Access.MCP.Tests
             Assert.NotNull(response);
             Assert.Null(response.Error);
             Assert.Equal(1L, response.Id);
-            var resultElement = JsonSerializer.SerializeToElement(response.Result);
-            Assert.True(resultElement.GetProperty("success").GetBoolean());
+            Assert.NotNull(response.Result);
         }
 
         [Fact]

@@ -31,6 +31,9 @@ namespace MS.Access.MCP.Interop
 
         public void Connect(string databasePath)
         {
+            if (string.IsNullOrEmpty(databasePath))
+                throw new ArgumentNullException(nameof(databasePath));
+
             if (!File.Exists(databasePath))
                 throw new FileNotFoundException($"Database file not found: {databasePath}");
 
@@ -66,6 +69,7 @@ namespace MS.Access.MCP.Interop
                     _oleDbConnection = null;
                 }
 
+                Disconnect();
                 FileLogger.Log($"AccessInteropService.Connect: failed to connect to database: {ex.Message}");
                 throw new InvalidOperationException($"Failed to connect to database: {ex.Message}", ex);
             }
@@ -132,7 +136,7 @@ namespace MS.Access.MCP.Interop
                         }
                         catch { }
 
-                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                        accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
                     }
                     catch (Exception ex)
                     {
@@ -318,8 +322,8 @@ namespace MS.Access.MCP.Interop
 
         public object ExecuteSql(string sql, List<object?>? parameters = null, string mode = "select")
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL statement is required.", nameof(sql));
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
 
             sql = sql.Trim();
             if (sql.EndsWith(";"))
@@ -383,9 +387,9 @@ namespace MS.Access.MCP.Interop
 
         public List<Dictionary<string, object?>> ReadTableData(string objectName, int limit = 50, int offset = 0)
         {
-            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (string.IsNullOrWhiteSpace(objectName)) throw new ArgumentException("Object name is required.", nameof(objectName));
             if (!IsValidObjectName(objectName)) throw new ArgumentException("Invalid object name.", nameof(objectName));
+            if (!IsConnected) throw new InvalidOperationException("Not connected to database");
             if (limit <= 0) limit = 50;
             if (offset < 0) offset = 0;
 
@@ -843,7 +847,7 @@ namespace MS.Access.MCP.Interop
             try
             {
                 var accessType = _accessApplication.GetType();
-                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, null);
+                accessType.InvokeMember("Quit", BindingFlags.InvokeMethod, null, _accessApplication, new object[] { 2 });
             }
             catch (Exception ex)
             {
@@ -879,9 +883,9 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetForms failed: {ex.Message}");
             }
 
             return forms;
@@ -909,9 +913,9 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetReports failed: {ex.Message}");
             }
 
             return reports;
@@ -939,9 +943,9 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetMacros failed: {ex.Message}");
             }
 
             return macros;
@@ -969,9 +973,9 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetModules failed: {ex.Message}");
             }
 
             return modules;
@@ -1098,9 +1102,9 @@ namespace MS.Access.MCP.Interop
                     Modules = modules
                 });
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible
+                FileLogger.Log($"GetVBAProjects failed: {ex.Message}");
             }
 
             return projects;
@@ -1609,8 +1613,9 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                FileLogger.Log($"GetSystemTables failed: {ex.Message}");
                 // MSysObjects may be restricted; fallback to schema names with default timestamps
                 var schema = _oleDbConnection!.GetSchema("Tables");
                 foreach (System.Data.DataRow row in schema.Rows)
@@ -1661,9 +1666,9 @@ namespace MS.Access.MCP.Interop
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // MSysObjects might not be accessible, return empty list
+                FileLogger.Log($"GetObjectMetadata failed: {ex.Message}");
             }
 
             return metadata;
@@ -2055,9 +2060,9 @@ namespace MS.Access.MCP.Interop
                 {
                     fields.Add(new FieldInfo
                     {
-                        Name = row["COLUMN_NAME"]?.ToString() ?? "",
-                        Type = row["DATA_TYPE"]?.ToString() ?? "",
-                        Size = Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"] ?? 0),
+                        Name = row["COLUMN_NAME"] != DBNull.Value ? row["COLUMN_NAME"].ToString()! : "",
+                        Type = row["DATA_TYPE"] != DBNull.Value ? row["DATA_TYPE"].ToString()! : "",
+                        Size = Convert.ToInt32(row["CHARACTER_MAXIMUM_LENGTH"] != DBNull.Value ? row["CHARACTER_MAXIMUM_LENGTH"] : 0),
                         Required = row["IS_NULLABLE"]?.ToString() == "NO",
                         AllowZeroLength = true // Default value
                     });
@@ -2309,7 +2314,7 @@ namespace MS.Access.MCP.Interop
                 if (!string.IsNullOrEmpty(logDirectory))
                     Directory.CreateDirectory(logDirectory);
             }
-            catch { }
+            catch { /* Ignore exceptions to prevent host crashes */ }
 
             BackgroundWriter = Task.Factory.StartNew(() =>
             {
@@ -2319,7 +2324,7 @@ namespace MS.Access.MCP.Interop
                     {
                         File.AppendAllText(LogPath, entry + Environment.NewLine, Encoding.UTF8);
                     }
-                    catch { }
+                    catch { /* Ignore exceptions to prevent host crashes */ }
                 }
             }, TaskCreationOptions.LongRunning);
         }
@@ -2347,7 +2352,7 @@ namespace MS.Access.MCP.Interop
                 var line = JsonSerializer.Serialize(payload, SerializerOptions);
                 Queue.Add(line);
             }
-            catch { }
+            catch { /* Ignore exceptions to prevent host crashes */ }
         }
 
         public static void Shutdown()
@@ -2357,7 +2362,7 @@ namespace MS.Access.MCP.Interop
                 Queue.CompleteAdding();
                 BackgroundWriter.Wait(1000);
             }
-            catch { }
+            catch { /* Ignore exceptions to prevent host crashes */ }
         }
     }
 

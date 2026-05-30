@@ -110,5 +110,21 @@ namespace MS.Access.MCP.Tests
 
             Assert.Contains("Database file not found", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
+
+        [Fact]
+        public void AccessInteropService_Connect_NullOrEmptyPath_ThrowsArgumentNullException()
+        {
+            using var accessService = new AccessInteropService();
+            Assert.Throws<ArgumentNullException>(() => accessService.Connect(string.Empty));
+            Assert.Throws<ArgumentNullException>(() => accessService.Connect(null!));
+        }
+
+        [Fact]
+        public void CreateTable_InvalidTableName_ThrowsArgumentException()
+        {
+            using var accessService = new AccessInteropService();
+            // The validation happens before IsConnected, so this should throw ArgumentException
+            Assert.Throws<ArgumentException>(() => accessService.ReadTableData("Invalid;Name"));
+        }
     }
 }

@@ -2314,7 +2314,7 @@ namespace MS.Access.MCP.Interop
                 if (!string.IsNullOrEmpty(logDirectory))
                     Directory.CreateDirectory(logDirectory);
             }
-            catch { // Ignore exceptions to prevent host crashes }
+            catch { /* Ignore exceptions to prevent host crashes */ }
 
             BackgroundWriter = Task.Factory.StartNew(() =>
             {
@@ -2324,7 +2324,7 @@ namespace MS.Access.MCP.Interop
                     {
                         File.AppendAllText(LogPath, entry + Environment.NewLine, Encoding.UTF8);
                     }
-                    catch { // Ignore exceptions to prevent host crashes }
+                    catch { /* Ignore exceptions to prevent host crashes */ }
                 }
             }, TaskCreationOptions.LongRunning);
         }
@@ -2352,7 +2352,7 @@ namespace MS.Access.MCP.Interop
                 var line = JsonSerializer.Serialize(payload, SerializerOptions);
                 Queue.Add(line);
             }
-            catch { // Ignore exceptions to prevent host crashes }
+            catch { /* Ignore exceptions to prevent host crashes */ }
         }
 
         public static void Shutdown()
@@ -2362,7 +2362,7 @@ namespace MS.Access.MCP.Interop
                 Queue.CompleteAdding();
                 BackgroundWriter.Wait(1000);
             }
-            catch { // Ignore exceptions to prevent host crashes }
+            catch { /* Ignore exceptions to prevent host crashes */ }
         }
     }
 

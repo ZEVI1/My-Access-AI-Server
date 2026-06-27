@@ -367,12 +367,20 @@ namespace MS.Access.MCP.Interop
 
             using var reader = command.ExecuteReader();
             var rows = new List<Dictionary<string, object?>>();
+
+            var fieldCount = reader.FieldCount;
+            var columnNames = new string[fieldCount];
+            for (int i = 0; i < fieldCount; i++)
+            {
+                columnNames[i] = reader.GetName(i);
+            }
+
             while (reader.Read())
             {
                 var row = new Dictionary<string, object?>();
-                for (int i = 0; i < reader.FieldCount; i++)
+                for (int i = 0; i < fieldCount; i++)
                 {
-                    var name = reader.GetName(i);
+                    var name = columnNames[i];
                     var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
                     row[name] = value;
                 }
@@ -398,6 +406,14 @@ namespace MS.Access.MCP.Interop
             using var reader = command.ExecuteReader();
             var rows = new List<Dictionary<string, object?>>();
             var skipped = 0;
+
+            var fieldCount = reader.FieldCount;
+            var columnNames = new string[fieldCount];
+            for (int i = 0; i < fieldCount; i++)
+            {
+                columnNames[i] = reader.GetName(i);
+            }
+
             while (reader.Read())
             {
                 if (skipped < offset)
@@ -407,9 +423,9 @@ namespace MS.Access.MCP.Interop
                 }
 
                 var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                for (var i = 0; i < reader.FieldCount; i++)
+                for (var i = 0; i < fieldCount; i++)
                 {
-                    var name = reader.GetName(i);
+                    var name = columnNames[i];
                     var rawValue = reader.IsDBNull(i) ? null : reader.GetValue(i);
                     row[name] = NormalizeValue(rawValue);
                 }
